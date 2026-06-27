@@ -1,0 +1,35 @@
+[Unit]
+Description=CC Switch Protocol Bridge - Anthropic to OpenAI proxy
+Documentation=https://github.com/yourname/cc-switch-protocol-bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ccswitch
+Group=ccswitch
+ExecStart=/usr/bin/cc-switch serve --config /etc/cc-switch/config.yaml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/cc-switch
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cc-switch
+
+[Install]
+WantedBy=multi-user.target

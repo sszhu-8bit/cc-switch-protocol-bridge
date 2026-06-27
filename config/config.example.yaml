@@ -1,0 +1,32 @@
+# cc-switch-protocol-bridge configuration example
+# Copy to /etc/cc-switch/config.yaml and edit
+
+# 监听地址（默认 127.0.0.1，仅本地访问）
+listen_address: 127.0.0.1
+listen_port: 17821
+
+# 当前激活的 provider ID（与下面 providers 中的某个 id 对应）
+current_provider: ""
+
+providers:
+  # MiniMax (MiniMax M2) 示例
+  - id: minimax
+    name: MiniMax M2
+    vendor: minimax
+    base_url: https://api.MiniMax.chat
+    api_key: sk-your-key-here
+    models:
+      sonnet: MiniMax-M2
+      opus: MiniMax-M2
+      haiku: MiniMax-M2
+
+  # 阿里通义 DashScope 示例（OpenAI 兼容模式）
+  - id: qwen
+    name: Alibaba Qwen
+    vendor: openai-compatible
+    base_url: https://dashscope.aliyuncs.com/compatible-mode
+    api_key: sk-your-key-here
+    models:
+      sonnet: qwen-plus
+      opus: qwen-max
+      haiku: qwen-turbo

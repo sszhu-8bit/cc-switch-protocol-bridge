@@ -1,0 +1,141 @@
+// Fastify HTTP 服务器：接收 Claude Code 的 Anthropic 协议请求，
+// 转换为 OpenAI 协议后转发给上游 provider
+
+import Fastify, { type FastifyInstance } from "fastify";
+import { anthropicToOpenAI, openAIToAnthropic } from "./converter/anthropic-to-openai.js";
+import { OpenAIToAnthropicStream, formatAnthropicSSE } from "./converter/streaming.js";
+import { callUpstream, callUpstreamStream, parseOpenAIStream, UpstreamError } from "./providers/client.js";
+import { logger } from "./logger.js";
+import type { AnthropicMessagesRequest } from "./types.js";
+import type { AppConfig, ProviderConfig } from "./types.js";
+import { getCurrentProvider } from "./config.js";
+
+export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: false, // 用 pino 自己的 logger
+    bodyLimit: 100 * 1024 * 1024, // 100MB
+  });
+
+  // 健康检查
+  app.get("/health", async () => {
+    const provider = getCurrentProvider(config);
+    return {
+      status: "ok",
+      current_provider: provider?.id ?? null,
+      uptime_seconds: Math.floor(process.uptime()),
+    };
+  });
+
+  // 主入口：Anthropic Messages API
+  app.post("/v1/messages", async (req, reply) => {
+    const provider = getCurrentProvider(config);
+    if (!provider) {
+      return reply.code(503).send({
+        type: "error",
+        error: { type: "service_unavailable", message: "no provider configured" },
+      });
+    }
+
+    const body = req.body as AnthropicMessagesRequest;
+    if (!body || !body.model || !Array.isArray(body.messages)) {
+      return reply.code(400).send({
+        type: "error",
+        error: { type: "invalid_request_error", message: "invalid request body" },
+      });
+    }
+
+    const openaiReq = anthropicToOpenAI(body);
+    logger.info(
+      { provider: provider.id, model: openaiReq.model, stream: openaiReq.stream },
+      "incoming request"
+    );
+
+    if (openaiReq.stream) {
+      // 流式响应
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+
+      try {
+        const upstreamBody = await callUpstreamStream(provider, openaiReq);
+        const converter = new OpenAIToAnthropicStream();
+        for await (const chunk of parseOpenAIStream(upstreamBody)) {
+          const events = converter.feed(chunk);
+          if (events.length > 0) {
+            reply.raw.write(formatAnthropicSSE(events));
+          }
+        }
+        // 流结束
+        const finalEvents = converter.end();
+        if (finalEvents.length > 0) {
+          reply.raw.write(formatAnthropicSSE(finalEvents));
+        }
+        reply.raw.end();
+      } catch (err) {
+        logger.error({ err }, "upstream stream error");
+        const errMsg = err instanceof Error ? err.message : "unknown error";
+        reply.raw.write(
+          formatAnthropicSSE([
+            { type: "error", error: { type: "upstream_error", message: errMsg } },
+          ])
+        );
+        reply.raw.end();
+      }
+      return reply;
+    }
+
+    // 单请求
+    try {
+      const openaiResp = await callUpstream(provider, openaiReq);
+      const anthropicResp = openAIToAnthropic(openaiResp);
+      return reply.code(200).send(anthropicResp);
+    } catch (err) {
+      if (err instanceof UpstreamError) {
+        logger.error({ status: err.status, url: err.url }, "upstream error");
+        return reply.code(err.status >= 400 && err.status < 600 ? err.status : 502).send({
+          type: "error",
+          error: {
+            type: "upstream_error",
+            message: `upstream returned ${err.status}`,
+          },
+        });
+      }
+      // 网络错误、DNS 错误等：fetch 抛 TypeError
+      logger.error({ err }, "upstream connection error");
+      return reply.code(502).send({
+        type: "error",
+        error: {
+          type: "upstream_unreachable",
+          message: err instanceof Error ? err.message : "unknown error",
+        },
+      });
+    }
+  });
+
+  // Models 端点（Claude Code 探测用）
+  app.get("/v1/models", async () => {
+    const provider = getCurrentProvider(config);
+    if (!provider) return { data: [] };
+    return {
+      data: [
+        { id: provider.models.sonnet ?? "sonnet", type: "model" },
+        { id: provider.models.opus ?? "opus", type: "model" },
+        { id: provider.models.haiku ?? "haiku", type: "model" },
+      ],
+    };
+  });
+
+  return app;
+}
+
+export async function startServer(config: AppConfig): Promise<void> {
+  const app = await buildServer(config);
+  await app.listen({ host: config.listen_address, port: config.listen_port });
+  logger.info(
+    { address: config.listen_address, port: config.listen_port },
+    "cc-switch-protocol-bridge started"
+  );
+}
