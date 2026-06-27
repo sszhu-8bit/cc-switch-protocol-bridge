@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig, saveConfig, getProvider } from "../src/config.ts";
 import { buildClaudeSettings, writeClaudeSettings } from "../src/claude-config.ts";
+import type { AppConfig } from "../src/types.ts";
 
 const TEST_DIR = join(tmpdir(), `cc-switch-e2e-${Date.now()}`);
 const TEST_CONFIG = join(TEST_DIR, "cc-switch.yaml");
@@ -24,7 +25,7 @@ afterEach(() => {
 describe("provider use workflow", () => {
   test("switching between providers updates both files correctly", () => {
     // 初始：两个 provider 配置
-    const config = {
+    const config: AppConfig = {
       listen_address: "127.0.0.1",
       listen_port: 17821,
       current_provider: "deepseek",
@@ -92,7 +93,7 @@ describe("provider use workflow", () => {
     writeFileSync(TEST_CLAUDE, JSON.stringify(userSettings));
 
     // 切到 deepseek
-    const config = {
+    const config: AppConfig = {
       listen_address: "127.0.0.1",
       listen_port: 17821,
       current_provider: "",
