@@ -58,7 +58,8 @@ jobs:
           if [[ "$VERSION" == v* ]]; then
             VERSION="${VERSION#v}"
           else
-            VERSION="0.1.0-dev-${GITHUB_SHA::7}"
+            # RPM 版本号不允许 '-'，用 'g' 前缀 + 短 SHA
+            VERSION="0.1.0.dev.g${GITHUB_SHA::7}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
