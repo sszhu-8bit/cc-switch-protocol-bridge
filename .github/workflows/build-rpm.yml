@@ -1,0 +1,140 @@
+name: Build RPM
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build cc-switch RPM (AlmaLinux 9)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        
+        run: bun run typecheck
+
+      - name: Smoke test (help)
+        
+        run: |
+          chmod +x src/cli.ts
+          bun src/cli.ts --help
+          bun src/cli.ts provider --help
+
+      - name: Build Linux binary
+        
+        run: |
+          bun build src/cli.ts \
+            --compile \
+            --target=bun-linux-x64 \
+            --outfile=dist/cc-switch
+          chmod +x dist/cc-switch
+          ls -la dist/cc-switch
+          file dist/cc-switch
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          if [[ "$VERSION" == v* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.1.0-dev-${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Prepare RPM build directory
+        
+        run: |
+          mkdir -p .rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp dist/cc-switch .rpmbuild/SOURCES/cc-switch
+          cp config/config.example.yaml .rpmbuild/SOURCES/config.example.yaml
+          cp packaging/systemd/cc-switch.service .rpmbuild/SOURCES/cc-switch.service
+          cp packaging/postinstall.sh .rpmbuild/SOURCES/postinstall.sh
+          cp packaging/preremove.sh .rpmbuild/SOURCES/preremove.sh
+          cp packaging/postremove.sh .rpmbuild/SOURCES/postremove.sh
+          sed "s/%{version}/${{ steps.version.outputs.version }}/g" packaging/cc-switch.spec > .rpmbuild/SPECS/cc-switch.spec
+
+      - name: Build RPM in AlmaLinux 9 container
+        
+        run: |
+          docker run --rm \
+            --platform linux/amd64 \
+            -v "$PWD/.rpmbuild:/root/rpmbuild" \
+            -v "$PWD/dist:/dist" \
+            almalinux:9 \
+            bash -c '
+              set -e
+              dnf install -y rpm-build rpmdevtools systemd
+              rpmbuild -ba /root/rpmbuild/SPECS/cc-switch.spec
+              mkdir -p /dist
+              cp /root/rpmbuild/RPMS/x86_64/*.rpm /dist/ || true
+            '
+
+      - name: List build output
+        
+        run: |
+          ls -la dist/
+          echo "---"
+          ls -la .rpmbuild/RPMS/x86_64/ 2>/dev/null || true
+
+      - name: Copy RPM to dist
+        
+        run: |
+          if [ -d .rpmbuild/RPMS/x86_64 ]; then
+            cp .rpmbuild/RPMS/x86_64/*.rpm dist/ || true
+          fi
+          find . -name "*.rpm" -type f 2>/dev/null
+
+      - name: Verify RPM contents
+        
+        run: |
+          if ls dist/*.rpm 1> /dev/null 2>&1; then
+            rpm_file=$(ls dist/*.rpm | head -1)
+            echo "Verifying: $rpm_file"
+            # 用 rpm inspect 验证 rpm 文件结构
+            docker run --rm --platform linux/amd64 \
+              -v "$PWD/dist:/dist" \
+              almalinux:9 \
+              bash -c "rpm -qpl /dist/$(basename $rpm_file)"
+          else
+            echo "ERROR: no RPM file found"
+            exit 1
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-switch-rpm
+          path: |
+            cc-switch-protocol-bridge/dist/*.rpm
+            cc-switch-protocol-bridge/dist/cc-switch
+          if-no-files-found: error
+
+      - name: Create release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cc-switch-protocol-bridge/dist/*.rpm
+          generate_release_notes: true
