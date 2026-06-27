@@ -9,6 +9,13 @@ License:        MIT
 URL:            https://github.com/yourname/cc-switch-protocol-bridge
 BuildArch:      x86_64
 
+Source0:        cc-switch
+Source1:        config.example.yaml
+Source2:        cc-switch.service
+Source3:        postinstall.sh
+Source4:        preremove.sh
+Source5:        postremove.sh
+
 Requires:       systemd
 
 %description
