@@ -100,10 +100,16 @@ jobs:
           ls -la .rpmbuild/RPMS/x86_64/ 2>/dev/null || true
 
       - name: Copy RPM to dist
-        
+
         run: |
+          # RPM 文件由 root 写入挂载卷，runner 无写权限。
+          # 用 sudo / 改权限 / 用 docker cp 之一绕过。
           if [ -d .rpmbuild/RPMS/x86_64 ]; then
-            cp .rpmbuild/RPMS/x86_64/*.rpm dist/ || true
+            for rpm in .rpmbuild/RPMS/x86_64/*.rpm; do
+              [ -f "$rpm" ] || continue
+              chmod 644 "$rpm" 2>/dev/null || sudo chmod 644 "$rpm"
+              cp "$rpm" dist/ && echo "Copied: $rpm"
+            done
           fi
           find . -name "*.rpm" -type f 2>/dev/null
 
@@ -128,8 +134,8 @@ jobs:
         with:
           name: cc-switch-rpm
           path: |
-            cc-switch-protocol-bridge/dist/*.rpm
-            cc-switch-protocol-bridge/dist/cc-switch
+            dist/*.rpm
+            dist/cc-switch
           if-no-files-found: error
 
       - name: Create release (on tag)
