@@ -2,9 +2,11 @@
 // CLI 入口
 
 import { Command } from "commander";
+import { existsSync } from "node:fs";
 import { loadConfig, saveConfig, getProvider } from "./config.js";
 import { startServer } from "./server.js";
 import { logger } from "./logger.js";
+import { buildClaudeSettings, writeClaudeSettings } from "./claude-config.js";
 import type { ProviderConfig } from "./types.js";
 
 const program = new Command();
@@ -139,21 +141,87 @@ providerCmd
     console.log(`Provider '${id}' removed`);
   });
 
+// 切换当前 provider + 自动写 ~/.claude/settings.json + 重启 systemd 服务
 providerCmd
   .command("use")
-  .description("Switch the active provider")
+  .description(
+    "Switch the active provider. Updates /etc/cc-switch/config.yaml, rewrites ~/.claude/settings.json, and restarts the cc-switch systemd service."
+  )
   .argument("<id>", "Provider ID to activate")
-  .option("-c, --config <path>", "config file path", "/etc/cc-switch/config.yaml")
-  .action((id, opts) => {
+  .option(
+    "-c, --config <path>",
+    "cc-switch config file path",
+    "/etc/cc-switch/config.yaml"
+  )
+  .option(
+    "--claude-settings <path>",
+    "Claude Code settings.json path",
+    process.env["HOME"] + "/.claude/settings.json"
+  )
+  .option("--no-restart", "Don't restart systemd service (manual restart required)")
+  .option("--no-write-claude", "Skip writing ~/.claude/settings.json")
+  .action(async (id, opts) => {
     const config = loadConfig(opts.config);
-    if (!getProvider(config, id)) {
-      console.error(`Provider '${id}' not found`);
+    const provider = getProvider(config, id);
+    if (!provider) {
+      console.error(`Provider '${id}' not found. Run 'cc-switch provider list' to see available providers.`);
       process.exit(1);
     }
+
+    // 1. 改 /etc/cc-switch/config.yaml
     config.current_provider = id;
     saveConfig(config, opts.config);
-    console.log(`Switched to provider '${id}'`);
-    console.log(`Note: restart the service to apply: sudo systemctl restart cc-switch`);
+    console.log(`✓ Set '${id}' as current provider in ${opts.config}`);
+
+    // 2. 改 ~/.claude/settings.json
+    if (opts.writeClaude) {
+      try {
+        const proxyBaseUrl = `http://${config.listen_address}:${config.listen_port}`;
+        const settings = buildClaudeSettings(provider, proxyBaseUrl);
+        writeClaudeSettings(opts.claudeSettings, settings);
+        console.log(`✓ Updated ${opts.claudeSettings} (BASE_URL=${proxyBaseUrl})`);
+      } catch (e) {
+        console.error(
+          `✗ Failed to write ${opts.claudeSettings}: ${e instanceof Error ? e.message : e}`
+        );
+        console.error(`  Run 'cc-switch provider use ${id} --no-write-claude' to skip.`);
+        process.exit(1);
+      }
+    }
+
+    // 3. 重启 systemd 服务
+    if (opts.restart) {
+      const isSystemd = existsSync("/run/systemd/system");
+      if (!isSystemd) {
+        console.log(`⚠ systemd not detected. Restart the service manually:`);
+        console.log(`    /usr/bin/cc-switch serve --config ${opts.config}`);
+      } else {
+        try {
+          const proc = Bun.spawn(["systemctl", "restart", "cc-switch.service"], {
+            stdout: "inherit",
+            stderr: "inherit",
+          });
+          await proc.exited;
+          if (proc.exitCode === 0) {
+            console.log(`✓ Restarted cc-switch.service`);
+          } else {
+            console.error(`✗ systemctl restart failed (exit ${proc.exitCode})`);
+            process.exit(1);
+          }
+        } catch (e) {
+          console.error(
+            `✗ Failed to invoke systemctl: ${e instanceof Error ? e.message : e}`
+          );
+          console.error(`  Run manually: sudo systemctl restart cc-switch`);
+          process.exit(1);
+        }
+      }
+    } else {
+      console.log(`⚠ Skipped restart. Run: sudo systemctl restart cc-switch`);
+    }
+
+    console.log(`\nNow using: ${provider.name} (${provider.vendor})`);
+    console.log(`Models: sonnet -> ${provider.models.sonnet ?? "(default)"}, opus -> ${provider.models.opus ?? "(default)"}, haiku -> ${provider.models.haiku ?? "(default)"}`);
   });
 
 // 交互式添加 provider

@@ -125,13 +125,50 @@ sudo systemctl enable cc-switch
 
 ## 接入 Claude Code
 
-编辑 `~/.claude/settings.json`（Linux 上是 `~/.claude/settings.json`）：
+首次接入后，**你只需要切 provider 一条命令**，cc-switch 会自动：
+
+1. 写 `/etc/cc-switch/config.yaml` 标记当前激活的 provider
+2. 写 `~/.claude/settings.json`（保留你原有的 mcpServers / permissions / 自定义 env 变量）
+3. 重启 systemd 服务
+
+### 首次接入（一次性）
+
+编辑 `/etc/cc-switch/config.yaml` 填入 provider（参考上文）。然后：
+
+```bash
+# 切换到第一个 provider（自动写 ~/.claude/settings.json + 重启服务）
+sudo cc-switch provider use deepseek
+```
+
+### 切换厂商（日常工作流）
+
+```bash
+# 切到 DeepSeek
+sudo cc-switch provider use deepseek
+
+# 切到 Kimi
+sudo cc-switch provider use kimi
+
+# 切到 GLM
+sudo cc-switch provider use glm
+
+# 每次切换会自动：
+#   1. 改 /etc/cc-switch/config.yaml 的 current_provider
+#   2. 改 ~/.claude/settings.json 的 ANTHROPIC_BASE_URL 等
+#   3. systemctl restart cc-switch
+```
+
+切完后，**直接 `claude` 即可**，Claude Code 会通过本地 proxy 路由到当前激活的 provider。
+
+### 默认 ~/.claude/settings.json 内容
+
+`provider use` 写入的内容长这样：
 
 ```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721",
-    "ANTHROPIC_AUTH_TOKEN": "any-token-here",
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:17821",
+    "ANTHROPIC_AUTH_TOKEN": "cc-switch-managed",
     "ANTHROPIC_MODEL": "sonnet",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku",
@@ -140,7 +177,20 @@ sudo systemctl enable cc-switch
 }
 ```
 
-启动 `claude`，流量会自动走本地代理，转发给当前激活的 provider。
+`ANTHROPIC_BASE_URL` 永远指向本地 proxy；proxy 在转发时从 `/etc/cc-switch/config.yaml` 读真实 token 和模型映射。
+
+### 高级选项
+
+```bash
+# 不重启服务（手动重启）
+sudo cc-switch provider use deepseek --no-restart
+
+# 不写 ~/.claude/settings.json（只改 cc-switch 自己的 config）
+sudo cc-switch provider use deepseek --no-write-claude
+
+# 自定义 Claude settings 路径
+sudo cc-switch provider use deepseek --claude-settings /custom/path/settings.json
+```
 
 ## 卸载
 
