@@ -4,7 +4,7 @@
 
 set -e
 
-PORT="${PORT:-15721}"
+PORT="${PORT:-17823}"
 URL="http://127.0.0.1:${PORT}/v1/messages"
 
 cleanup() {
@@ -14,23 +14,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Creating test config"
-cat > /tmp/cc-switch-test.yaml <<EOF
-listen_address: 127.0.0.1
-listen_port: ${PORT}
-current_provider: mock
-providers:
-  - id: mock
-    name: Mock Provider
-    vendor: openai-compatible
-    base_url: http://127.0.0.1:9999  # won't actually be called in this test
-    api_key: test-key
-    models:
-      sonnet: test-model
-EOF
+echo "==> Creating test DB"
+TEST_DIR=$(mktemp -d)
+TEST_DB="$TEST_DIR/cc-switch.db"
+TEST_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+export CC_SWITCH_DB="$TEST_DB"
+export CC_SWITCH_MASTER_KEY="$TEST_KEY"
+
+echo "==> Inserting test provider"
+# 直接用 bun 插入（用 CLI 子命令更友好但会触发更多依赖）
+bun -e "
+import { saveProvider, setCurrentProvider, openDatabase, _resetForTests } from './src/store/db.ts';
+openDatabase('$TEST_DB');
+await saveProvider({
+  id: 'mock',
+  name: 'Mock Provider',
+  vendor: 'openai-compatible',
+  base_url: 'http://127.0.0.1:9999',
+  api_key: 'test-key',
+  models: { sonnet: 'test-model' },
+});
+setCurrentProvider('mock');
+console.log('Provider inserted');
+"
 
 echo "==> Starting cc-switch serve"
-bun run src/cli.ts serve --config /tmp/cc-switch-test.yaml &
+bun run src/cli.ts serve --listen-port "$PORT" &
 SERVER_PID=$!
 sleep 2
 
@@ -67,6 +77,7 @@ else
     exit 1
 fi
 
+rm -rf "$TEST_DIR"
+
 echo ""
 echo "==> All smoke tests passed"
-echo "==> The HTTP server, routing, and Anthropic protocol parsing all work."

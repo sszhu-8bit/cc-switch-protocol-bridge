@@ -162,6 +162,10 @@ export interface ProviderConfig {
   };
   /** 自定义请求头（如需要） */
   headers?: Record<string, string>;
+  /** 网站 URL（仅展示用） */
+  website_url?: string;
+  /** 备注 */
+  notes?: string;
 }
 
 export interface AppConfig {

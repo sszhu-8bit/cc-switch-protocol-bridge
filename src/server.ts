@@ -18,7 +18,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // 健康检查
   app.get("/health", async () => {
-    const provider = getCurrentProvider(config);
+    const provider = await getCurrentProvider(config);
     return {
       status: "ok",
       current_provider: provider?.id ?? null,
@@ -28,7 +28,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // 主入口：Anthropic Messages API
   app.post("/v1/messages", async (req, reply) => {
-    const provider = getCurrentProvider(config);
+    const provider = await getCurrentProvider(config);
     if (!provider) {
       return reply.code(503).send({
         type: "error",
@@ -117,7 +117,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // Models 端点（Claude Code 探测用）
   app.get("/v1/models", async () => {
-    const provider = getCurrentProvider(config);
+    const provider = await getCurrentProvider(config);
     if (!provider) return { data: [] };
     return {
       data: [

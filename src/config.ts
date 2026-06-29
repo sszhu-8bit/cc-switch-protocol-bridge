@@ -1,47 +1,60 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import yaml from "js-yaml";
+// 配置层：基于 SQLite 存储（src/store/db.ts）
+//
+// 向后兼容：从 YAML 配置迁移过来。对外 API 仍然是 loadConfig / saveConfig
+// 但底层是 SQLite，可选地支持加密 API key。
+
+import {
+  getCurrentProviderId,
+  getSetting,
+  listProviders,
+  saveProvider,
+  setCurrentProvider,
+  setSetting,
+  deleteProvider as dbDeleteProvider,
+} from "./store/db.js";
 import type { AppConfig, ProviderConfig } from "./types.js";
 
-const DEFAULT_CONFIG_PATH =
-  process.env["CC_SWITCH_CONFIG"] ?? "/etc/cc-switch/config.yaml";
-
-export const DEFAULT_CONFIG: AppConfig = {
-  listen_address: "127.0.0.1",
-  listen_port: 17821, // 避开 cc-switch 默认的 15721
-  current_provider: "",
-  providers: [],
-};
-
-export function loadConfig(path: string = DEFAULT_CONFIG_PATH): AppConfig {
-  if (!existsSync(path)) {
-    return structuredClone(DEFAULT_CONFIG);
-  }
-  const content = readFileSync(path, "utf-8");
-  const parsed = yaml.load(content) as Partial<AppConfig> | null;
-  if (!parsed) {
-    return structuredClone(DEFAULT_CONFIG);
-  }
+/** 兼容层：保留旧函数签名 */
+export async function loadConfig(): Promise<AppConfig> {
+  const providers = await listProviders();
+  const listenAddress = getSetting("listen_address") ?? "127.0.0.1";
+  const listenPort = parseInt(getSetting("listen_port") ?? "17821", 10);
   return {
-    ...DEFAULT_CONFIG,
-    ...parsed,
-    providers: parsed.providers ?? [],
+    listen_address: listenAddress,
+    listen_port: listenPort,
+    current_provider: getCurrentProviderId(),
+    providers,
   };
 }
 
-export function saveConfig(config: AppConfig, path: string = DEFAULT_CONFIG_PATH): void {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+/**
+ * 此函数现在接受 AppConfig 并将 metadata（listen_address / listen_port /
+ * current_provider）写入 settings 表。providers 单独处理。
+ */
+export async function saveConfig(config: AppConfig): Promise<void> {
+  setSetting("listen_address", config.listen_address);
+  setSetting("listen_port", String(config.listen_port));
+  setCurrentProvider(config.current_provider);
+  // providers 由 provider 服务单独管理（每个 CRUD 调用 saveProvider）
+  // 这里为向后兼容，如果传入的 providers 不在 DB 中则插入（但通常不应这样做）
+  for (const p of config.providers) {
+    await saveProvider(p);
   }
-  writeFileSync(path, yaml.dump(config, { lineWidth: 120, noRefs: true }), "utf-8");
 }
 
-export function getProvider(config: AppConfig, id: string): ProviderConfig | undefined {
+/** 兼容层 */
+export async function getProvider(
+  config: AppConfig,
+  id: string
+): Promise<ProviderConfig | undefined> {
   return config.providers.find((p) => p.id === id);
 }
 
-export function getCurrentProvider(config: AppConfig): ProviderConfig | undefined {
+export async function getCurrentProvider(
+  config: AppConfig
+): Promise<ProviderConfig | undefined> {
   if (!config.current_provider) return undefined;
-  return getProvider(config, config.current_provider);
+  return config.providers.find((p) => p.id === config.current_provider);
 }
+
+export { deleteProvider as _deleteProvider } from "./store/db.js";
