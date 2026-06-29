@@ -105,3 +105,27 @@ export function readClaudeEnv(path: string): Record<string, string> | null {
     return null;
   }
 }
+
+/**
+ * 读取 ~/.claude/settings.json 的完整原始内容（用于 P0-4 原子化回滚）
+ * 返回 null 表示文件不存在（首次切换场景）
+ */
+export function readClaudeSettingsRaw(path: string): string | null {
+  if (!existsSync(path)) return null;
+  return readFileSync(path, "utf-8");
+}
+
+/**
+ * 将原始内容写回 ~/.claude/settings.json（用于回滚）
+ * - 不解析 JSON：避免 round-trip 丢字段（注释、字段顺序等）
+ * - 原子写：tmp + rename
+ */
+export function restoreClaudeSettings(path: string, content: string): void {
+  const dir = dirname(path);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const tmp = `${path}.rollback.tmp`;
+  writeFileSync(tmp, content, "utf-8");
+  renameSync(tmp, path);
+}

@@ -17,7 +17,12 @@ import {
 } from "./store/db.js";
 import { startServer } from "./server.js";
 import { logger } from "./logger.js";
-import { buildClaudeSettings, writeClaudeSettings } from "./claude-config.js";
+import {
+  buildClaudeSettings,
+  writeClaudeSettings,
+  readClaudeSettingsRaw,
+  restoreClaudeSettings,
+} from "./claude-config.js";
 import type { ProviderConfig } from "./types.js";
 
 const program = new Command();
@@ -156,10 +161,11 @@ providerCmd
   });
 
 // 切换当前 provider + 自动写 ~/.claude/settings.json + 重启 systemd 服务
+// P0-4: 事务式执行，失败时回滚到原状态
 providerCmd
   .command("use")
   .description(
-    "Switch the active provider. Updates cc-switch DB, rewrites ~/.claude/settings.json, and restarts the cc-switch systemd service."
+    "Switch the active provider. Updates cc-switch DB, rewrites ~/.claude/settings.json, and restarts the cc-switch systemd service. Transactional: rolls back on failure."
   )
   .argument("<id>", "Provider ID to activate")
   .option(
@@ -177,57 +183,169 @@ providerCmd
       process.exit(1);
     }
 
-    // 1. 改 DB
-    setCurrentProvider(id);
-    console.log(`✓ Set '${id}' as current provider in DB`);
+    // === P0-4 事务快照 ===
+    // 在做任何修改前记录旧状态，用于失败时回滚
+    const oldProviderId = getCurrentProviderId();
+    const oldClaudeSettingsRaw = opts.writeClaude
+      ? readClaudeSettingsRaw(opts.claudeSettings)
+      : null;
 
-    // 2. 改 ~/.claude/settings.json
-    if (opts.writeClaude) {
-      try {
+    let dbChanged = false;
+    let settingsWritten = false;
+
+    try {
+      // 步骤 1: 改 DB
+      setCurrentProvider(id);
+      dbChanged = true;
+      console.log(`✓ Set '${id}' as current provider in DB`);
+
+      // 步骤 2: 改 ~/.claude/settings.json
+      if (opts.writeClaude) {
         const proxyBaseUrl = `http://${config.listen_address}:${config.listen_port}`;
         const settings = buildClaudeSettings(provider, proxyBaseUrl);
         writeClaudeSettings(opts.claudeSettings, settings);
+        settingsWritten = true;
         console.log(`✓ Updated ${opts.claudeSettings} (BASE_URL=${proxyBaseUrl})`);
-      } catch (e) {
-        console.error(
-          `✗ Failed to write ${opts.claudeSettings}: ${e instanceof Error ? e.message : e}`
-        );
-        process.exit(1);
       }
-    }
 
-    // 3. 重启 systemd 服务
-    if (opts.restart) {
-      if (!existsSync("/run/systemd/system")) {
-        console.log(`⚠ systemd not detected. Restart the service manually:`);
-        console.log(`    /usr/bin/cc-switch serve`);
-      } else {
-        try {
-          const proc = Bun.spawn(["systemctl", "restart", "cc-switch.service"], {
-            stdout: "inherit",
-            stderr: "inherit",
-          });
-          await proc.exited;
-          if (proc.exitCode === 0) {
-            console.log(`✓ Restarted cc-switch.service`);
-          } else {
-            console.error(`✗ systemctl restart failed (exit ${proc.exitCode})`);
-            process.exit(1);
+      // 步骤 3: 重启 systemd 服务
+      if (opts.restart) {
+        if (!existsSync("/run/systemd/system")) {
+          console.log(`⚠ systemd not detected. Restart the service manually:`);
+          console.log(`    /usr/bin/cc-switch serve`);
+        } else {
+          const restartResult = await restartSystemdService();
+          if (!restartResult.ok) {
+            // 重启失败：抛出，由外层 catch 回滚
+            throw new SwitchError(
+              `systemctl restart failed (exit ${restartResult.exitCode ?? "?"}): ${restartResult.stderr ?? ""}`
+            );
           }
-        } catch (e) {
-          console.error(
-            `✗ Failed to invoke systemctl: ${e instanceof Error ? e.message : e}`
+          console.log(`✓ Restarted cc-switch.service`);
+
+          // 步骤 4: 后置健康检查
+          // 等 1 秒让 systemd 完全启动，然后 ping /health
+          await new Promise((r) => setTimeout(r, 1000));
+          const healthOk = await checkHealth(
+            `http://${config.listen_address}:${config.listen_port}/health`
           );
-          process.exit(1);
+          if (!healthOk) {
+            throw new SwitchError(
+              `Service started but /health did not return 200 within timeout. ` +
+                `The proxy may be misconfigured or the port may be in use.`
+            );
+          }
+          console.log(`✓ Health check passed`);
         }
+      } else {
+        console.log(`⚠ Skipped restart. Run: sudo systemctl restart cc-switch`);
       }
-    } else {
-      console.log(`⚠ Skipped restart. Run: sudo systemctl restart cc-switch`);
+    } catch (err) {
+      // === P0-4 回滚 ===
+      console.error(
+        `\n✗ Switch failed: ${err instanceof Error ? err.message : err}`
+      );
+      console.error(`  Rolling back...`);
+      try {
+        if (settingsWritten && oldClaudeSettingsRaw !== null) {
+          restoreClaudeSettings(opts.claudeSettings, oldClaudeSettingsRaw);
+          console.error(`  ✓ Restored ${opts.claudeSettings}`);
+        } else if (settingsWritten && oldClaudeSettingsRaw === null) {
+          // 旧文件不存在但现在写了 → 删除新建的（恢复"无"状态）
+          try {
+            const { unlinkSync } = await import("node:fs");
+            unlinkSync(opts.claudeSettings);
+            console.error(`  ✓ Removed new ${opts.claudeSettings}`);
+          } catch {
+            console.error(`  ⚠ Could not remove new ${opts.claudeSettings} (manual cleanup may be needed)`);
+          }
+        }
+        if (dbChanged) {
+          setCurrentProvider(oldProviderId);
+          console.error(`  ✓ Restored current_provider='${oldProviderId}' in DB`);
+        }
+        // 如果已 systemctl restart 过，尝试再 restart 回到原 provider
+        if (opts.restart && existsSync("/run/systemd/system") && oldProviderId) {
+          console.error(`  Re-restarting service with old provider...`);
+          const r = await restartSystemdService();
+          if (r.ok) {
+            console.error(`  ✓ Service re-restarted`);
+          } else {
+            console.error(`  ⚠ Failed to re-restart: ${r.stderr ?? "unknown"}`);
+          }
+        }
+      } catch (rollbackErr) {
+        console.error(
+          `  ✗ Rollback FAILED: ${rollbackErr instanceof Error ? rollbackErr.message : rollbackErr}`
+        );
+        console.error(`  Manual recovery may be required.`);
+      }
+      process.exit(1);
     }
 
     console.log(`\nNow using: ${provider.name} (${provider.vendor})`);
     console.log(`Models: sonnet -> ${provider.models.sonnet ?? "(default)"}, opus -> ${provider.models.opus ?? "(default)"}, haiku -> ${provider.models.haiku ?? "(default)"}`);
   });
+
+/**
+ * P0-4: 自定义错误类型（事务回滚触发条件）
+ */
+class SwitchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SwitchError";
+  }
+}
+
+/**
+ * 异步执行 systemctl restart，返回结果（含 exit code / stderr）
+ */
+async function restartSystemdService(): Promise<{
+  ok: boolean;
+  exitCode: number | null;
+  stderr: string | null;
+}> {
+  try {
+    const proc = Bun.spawn(["systemctl", "restart", "cc-switch.service"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return {
+      ok: exitCode === 0,
+      exitCode,
+      stderr: stderr || null,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      exitCode: null,
+      stderr: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/**
+ * 健康检查：3 秒内重试 5 次
+ */
+async function checkHealth(url: string, maxAttempts = 5): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(1000) });
+      if (resp.ok) return true;
+    } catch {
+      /* retry */
+    }
+    if (i < maxAttempts - 1) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  return false;
+}
 
 // 交互式添加
 providerCmd
