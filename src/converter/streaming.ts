@@ -187,6 +187,34 @@ export class OpenAIToAnthropicStream {
     return events;
   }
 
+  /**
+   * 流中途异常中断时调用（P0-3 修复）
+   *
+   * 与 end() 区别：
+   * - end() 是正常完成，stop_reason 是上游告诉我们的（end_turn 等）
+   * - abort() 是异常中断，stop_reason 强制设为 max_tokens（语义：长度截断）
+   * - 调用 abort() 后再调用 feed() / end() 是 no-op（状态机已终态）
+   *
+   * 输出事件顺序（保证客户端能"干净地"收尾）：
+   *   1. content_block_stop（关闭未完的文本块 / 工具块）
+   *   2. message_delta（带 stop_reason 和 usage）
+   *   3. message_stop
+   *
+   * 调用方在收到这些事件后应**再发**一个 error 事件，让客户端
+   * 知道是异常中断而非正常完成。
+   */
+  abort(): AnthropicStreamEvent[] {
+    if (this.finished) return [];
+    this.finished = true;
+    // 异常中断：stop_reason 用 max_tokens（"被截断"），避免 end_turn
+    // 误表达"模型正常完成"
+    this.finalFinishReason = "max_tokens";
+    const events: AnthropicStreamEvent[] = [];
+    this.ensureTextBlockClosed(events);
+    this.flushStopEvents(events);
+    return events;
+  }
+
   private ensureTextBlockClosed(events: AnthropicStreamEvent[]) {
     if (this.textBlockStarted) {
       events.push({
@@ -237,4 +265,36 @@ export function formatAnthropicSSE(events: AnthropicStreamEvent[]): string {
   return events
     .map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`)
     .join("");
+}
+
+/**
+ * Anthropic 错误类型（参考官方 SDK）
+ * https://docs.anthropic.com/en/api/errors
+ */
+export type AnthropicErrorType =
+  | "api_error"           // 通用服务端错误
+  | "overloaded_error"    // 429 / 503：上游过载
+  | "rate_limit_error"    // 429：限流
+  | "authentication_error" // 401 / 403：认证失败
+  | "permission_error"    // 403：权限不足
+  | "not_found_error"     // 404：模型 / 端点不存在
+  | "invalid_request_error" // 400：请求格式错
+  | "timeout_error"       // 上游超时
+  | "upstream_unavailable" // 502/503/504：上游不可达
+  ;
+
+/**
+ * 将上游 HTTP 状态码映射到 Anthropic 错误类型
+ * 客户端可以基于 type 做智能重试
+ */
+export function mapUpstreamStatusToErrorType(status: number): AnthropicErrorType {
+  if (status === 401 || status === 403) return "authentication_error";
+  if (status === 404) return "not_found_error";
+  if (status === 408) return "timeout_error";
+  if (status === 429) return "rate_limit_error";
+  if (status === 400 || status === 422) return "invalid_request_error";
+  if (status === 502 || status === 503 || status === 504) return "upstream_unavailable";
+  if (status >= 500 && status < 600) return "api_error";
+  if (status >= 400 && status < 500) return "invalid_request_error";
+  return "api_error";
 }

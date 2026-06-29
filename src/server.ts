@@ -3,7 +3,12 @@
 
 import Fastify, { type FastifyInstance } from "fastify";
 import { anthropicToOpenAI, openAIToAnthropic } from "./converter/anthropic-to-openai.js";
-import { OpenAIToAnthropicStream, formatAnthropicSSE } from "./converter/streaming.js";
+import {
+  OpenAIToAnthropicStream,
+  formatAnthropicSSE,
+  mapUpstreamStatusToErrorType,
+  type AnthropicErrorType,
+} from "./converter/streaming.js";
 import { callUpstream, callUpstreamStream, parseOpenAIStream, UpstreamError } from "./providers/client.js";
 import { logger } from "./logger.js";
 import type { AnthropicMessagesRequest } from "./types.js";
@@ -59,31 +64,41 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
         "X-Accel-Buffering": "no",
       });
 
+      const converter = new OpenAIToAnthropicStream();
       try {
         const upstreamBody = await callUpstreamStream(provider, openaiReq);
-        const converter = new OpenAIToAnthropicStream();
         for await (const chunk of parseOpenAIStream(upstreamBody)) {
           const events = converter.feed(chunk);
           if (events.length > 0) {
             reply.raw.write(formatAnthropicSSE(events));
           }
         }
-        // 流结束
+        // 正常结束
         const finalEvents = converter.end();
         if (finalEvents.length > 0) {
           reply.raw.write(formatAnthropicSSE(finalEvents));
         }
-        reply.raw.end();
       } catch (err) {
-        logger.error({ err }, "upstream stream error");
-        const errMsg = err instanceof Error ? err.message : "unknown error";
+        // P0-3: 异常中断时先发 message_stop，让客户端"干净收尾"
+        // 再发 error event 让客户端知道是异常
+        logger.error({ err, provider: provider.id }, "upstream stream interrupted");
+
+        // 步骤 1: 关闭已开的内容块 + message_stop（使用 converter 的 abort 状态机）
+        const abortEvents = converter.abort();
+        if (abortEvents.length > 0) {
+          reply.raw.write(formatAnthropicSSE(abortEvents));
+        }
+
+        // 步骤 2: 发 Anthropic 标准格式的 error 事件
+        const errType = classifyStreamError(err);
+        const errMsg = sanitizeErrorMessage(err);
         reply.raw.write(
           formatAnthropicSSE([
-            { type: "error", error: { type: "upstream_error", message: errMsg } },
+            { type: "error", error: { type: errType, message: errMsg } },
           ])
         );
-        reply.raw.end();
       }
+      reply.raw.end();
       return reply;
     }
 
@@ -138,4 +153,47 @@ export async function startServer(config: AppConfig): Promise<void> {
     { address: config.listen_address, port: config.listen_port },
     "cc-switch-protocol-bridge started"
   );
+}
+
+/**
+ * 将流式抛出的异常分类为 Anthropic 错误类型
+ */
+function classifyStreamError(err: unknown): AnthropicErrorType {
+  if (err instanceof UpstreamError) {
+    return mapUpstreamStatusToErrorType(err.status);
+  }
+  // fetch 抛 TypeError = 网络层错误（DNS 失败 / 连接拒绝 / TCP reset）
+  if (err instanceof TypeError) {
+    return "upstream_unavailable";
+  }
+  // AbortError / TimeoutError
+  if (
+    err instanceof Error &&
+    (err.name === "AbortError" || err.name === "TimeoutError")
+  ) {
+    return "timeout_error";
+  }
+  return "api_error";
+}
+
+/**
+ * 清洗错误信息：避免暴露上游敏感细节（API key / 内部 URL）
+ *
+ * 错误消息只告诉用户"发生了什么"（便于重试判断），不告诉"为什么"
+ * （避免泄漏内部信息）。完整错误在 server log 里（开发可见）。
+ */
+function sanitizeErrorMessage(err: unknown): string {
+  if (err instanceof UpstreamError) {
+    return `upstream returned ${err.status}`;
+  }
+  if (err instanceof TypeError) {
+    return "upstream unreachable (network error)";
+  }
+  if (
+    err instanceof Error &&
+    (err.name === "AbortError" || err.name === "TimeoutError")
+  ) {
+    return "upstream timeout";
+  }
+  return "internal error";
 }
