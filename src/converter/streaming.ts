@@ -11,6 +11,11 @@ import type {
 /**
  * 流式转换器：消费 OpenAI SSE chunks，产出 Anthropic SSE events
  *
+ * v0.4.3 修订 (P1-2 修复):
+ * - 工具调用状态机：延迟 content_block_start 直到收到完整 id+name
+ * - 处理各种 OpenAI 实现 chunk 顺序不一致的情况
+ * - arguments 增量累积 + parse 校验
+ *
  * 设计要点：
  * - 状态机：跟踪 message_start / content_block_start / content_block_delta / message_stop
  * - text 块和 tool_calls 块分开计数
@@ -22,19 +27,38 @@ export class OpenAIToAnthropicStream {
   private inputTokens: number = 0;
   private outputTokens: number = 0;
 
-  /** 当前活跃的 content block index */
+  /** 当前活跃的 text content block */
   private textBlockIndex: number = -1;
   private textBlockStarted: boolean = false;
 
-  /** 当前 tool_call 块累计 */
+  /**
+   * Tool call 状态机（P1-2 关键改进）
+   *
+   * 每个 tool_call 经历三个状态：
+   *   Pending   — id / name 还缺，至少一个未到达
+   *   Streaming — id + name 都已收到，content_block_start 已发出，正在收 arguments
+   *   Complete  — arguments 解析为有效 JSON（end 之前可能永远不会进 Complete，
+   *               因为部分上游会在 finish_reason 之前闭合 JSON）
+   *
+   * 关键约束：content_block_start **必须**携带非空的 id 和 name。
+   * 一些 OpenAI 实现（特别是 DeepSeek / Qwen 等）的 chunk 顺序不一致：
+   *   - 第一 chunk：只有 id，没有 name
+   *   - 第二 chunk：name 到达，arguments 第一个字符到来
+   * 我们的状态机在 name 到达时才发出 start，而不是在 entry 创建时。
+   */
   private toolCalls: Map<
     number,
     {
+      /** Content block index 分配 */
       index: number;
-      id: string;
-      name: string;
+      id: string | null;
+      name: string | null;
+      /** 累积的 JSON 字符串 */
       argsBuffer: string;
+      /** 是否已发出 content_block_start */
       blockStarted: boolean;
+      /** arguments 是否已 parse 成功（end 之前可能仍是 false） */
+      argsParsedOk: boolean;
     }
   > = new Map();
 
@@ -57,6 +81,7 @@ export class OpenAIToAnthropicStream {
 
   /** 累积的文本（用于最终 fallback） */
   private textBuffer: string = "";
+
 
   /**
    * 处理一个 OpenAI 流式 chunk，返回一个或多个 Anthropic 事件
@@ -116,22 +141,45 @@ export class OpenAIToAnthropicStream {
         });
       }
 
-      // 处理 tool_calls 增量
+      // 处理 tool_calls 增量（P1-2 状态机）
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {
           const idx = tc.index ?? 0;
           let entry = this.toolCalls.get(idx);
           if (!entry) {
+            // 第一次见到这个 tool_call index — 创建 entry 但不发 start
+            // 等 id + name 都齐了再发
             entry = {
               index: this.nextBlockIndex++,
-              id: tc.id ?? "",
-              name: tc.function?.name ?? "",
+              id: tc.id ?? null,
+              name: tc.function?.name ?? null,
               argsBuffer: "",
               blockStarted: false,
+              argsParsedOk: false,
             };
             this.toolCalls.set(idx, entry);
           }
-          if (!entry.blockStarted) {
+
+          // 合并 id（覆盖而非累积，id 是单值）
+          // 重要：用 `tc.id !== undefined` 区分"没给"和"给空字符串"
+          if (tc.id !== undefined) {
+            entry.id = tc.id;
+          }
+          // 合并 name — name 是单值；同样区分 undefined 和空字符串
+          if (tc.function?.name !== undefined) {
+            entry.name = tc.function.name;
+          }
+
+          // 现在看是否 id+name 都齐了 → 可以发 content_block_start
+          // 此时若已有累积的 args（args-before-name 上游怪顺序），要把累积部分作为
+          // start 后的第一个 delta 发出，否则 client 看不到 start 前的 args 数据。
+          if (
+            !entry.blockStarted &&
+            entry.id !== null &&
+            entry.id !== "" &&
+            entry.name !== null &&
+            entry.name !== ""
+          ) {
             entry.blockStarted = true;
             events.push({
               type: "content_block_start",
@@ -143,16 +191,42 @@ export class OpenAIToAnthropicStream {
                 input: {},
               },
             });
+            // Flush 已累积的 args（如有）
+            if (entry.argsBuffer.length > 0) {
+              events.push({
+                type: "content_block_delta",
+                index: entry.index,
+                delta: {
+                  type: "input_json_delta",
+                  partial_json: entry.argsBuffer,
+                },
+              });
+            }
           }
-          if (tc.id) entry.id = tc.id;
-          if (tc.function?.name) entry.name = tc.function.name;
-          if (tc.function?.arguments) {
+
+          // 累积 arguments 增量
+          if (tc.function?.arguments !== undefined) {
+            const isPreStartChunk = !entry.blockStarted;
             entry.argsBuffer += tc.function.arguments;
-            events.push({
-              type: "content_block_delta",
-              index: entry.index,
-              delta: { type: "input_json_delta", partial_json: tc.function.arguments },
-            });
+            // 已 start 后的增量：发 delta
+            // 未 start 阶段的累积：会在 start 事件时 flush（见上方）
+            if (entry.blockStarted && !isPreStartChunk) {
+              events.push({
+                type: "content_block_delta",
+                index: entry.index,
+                delta: {
+                  type: "input_json_delta",
+                  partial_json: tc.function.arguments,
+                },
+              });
+            }
+            // 试 parse — 若完整 JSON 解析成功，标记 complete
+            try {
+              JSON.parse(entry.argsBuffer);
+              entry.argsParsedOk = true;
+            } catch {
+              entry.argsParsedOk = false;
+            }
           }
         }
       }
