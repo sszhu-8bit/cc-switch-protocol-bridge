@@ -11,11 +11,15 @@ import {
 } from "./converter/streaming.js";
 import { callUpstream, callUpstreamStream, parseOpenAIStream, UpstreamError } from "./providers/client.js";
 import { logger } from "./logger.js";
+import { Stats } from "./stats.js";
 import type { AnthropicMessagesRequest } from "./types.js";
 import type { AppConfig, ProviderConfig } from "./types.js";
 import { getCurrentProvider } from "./config.js";
 
-export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
+export async function buildServer(
+  config: AppConfig,
+  stats: Stats = new Stats()
+): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false, // 用 pino 自己的 logger
     bodyLimit: 100 * 1024 * 1024, // 100MB
@@ -31,10 +35,17 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     };
   });
 
+  // P1-4: 运行时统计端点
+  app.get("/stats", async () => {
+    const provider = await getCurrentProvider(config);
+    return stats.snapshot(provider?.id ?? null);
+  });
+
   // 主入口：Anthropic Messages API
   app.post("/v1/messages", async (req, reply) => {
     const provider = await getCurrentProvider(config);
     if (!provider) {
+      stats.record(null, 503);
       return reply.code(503).send({
         type: "error",
         error: { type: "service_unavailable", message: "no provider configured" },
@@ -43,6 +54,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
     const body = req.body as AnthropicMessagesRequest;
     if (!body || !body.model || !Array.isArray(body.messages)) {
+      stats.record(provider.id, 400);
       return reply.code(400).send({
         type: "error",
         error: { type: "invalid_request_error", message: "invalid request body" },
@@ -78,6 +90,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
         if (finalEvents.length > 0) {
           reply.raw.write(formatAnthropicSSE(finalEvents));
         }
+        stats.record(provider.id, 200);
       } catch (err) {
         // P0-3: 异常中断时先发 message_stop，让客户端"干净收尾"
         // 再发 error event 让客户端知道是异常
@@ -97,6 +110,9 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
             { type: "error", error: { type: errType, message: errMsg } },
           ])
         );
+        // 状态码：upstream 错误按 status 透传；网络/超时统一 502
+        const streamStatus = err instanceof UpstreamError ? err.status : 502;
+        stats.record(provider.id, streamStatus >= 400 && streamStatus < 600 ? streamStatus : 502);
       }
       reply.raw.end();
       return reply;
@@ -106,11 +122,14 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     try {
       const openaiResp = await callUpstream(provider, openaiReq);
       const anthropicResp = openAIToAnthropic(openaiResp);
+      stats.record(provider.id, 200);
       return reply.code(200).send(anthropicResp);
     } catch (err) {
       if (err instanceof UpstreamError) {
         logger.error({ status: err.status, url: err.url }, "upstream error");
-        return reply.code(err.status >= 400 && err.status < 600 ? err.status : 502).send({
+        const code = err.status >= 400 && err.status < 600 ? err.status : 502;
+        stats.record(provider.id, code);
+        return reply.code(code).send({
           type: "error",
           error: {
             type: "upstream_error",
@@ -120,6 +139,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
       }
       // 网络错误、DNS 错误等：fetch 抛 TypeError
       logger.error({ err }, "upstream connection error");
+      stats.record(provider.id, 502);
       return reply.code(502).send({
         type: "error",
         error: {
