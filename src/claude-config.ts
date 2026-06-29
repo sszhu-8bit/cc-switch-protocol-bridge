@@ -3,6 +3,8 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
+import { parse, modify, applyEdits } from "jsonc-parser";
+import type { Node, Edit, ParseError } from "jsonc-parser";
 import type { ProviderConfig } from "./types.js";
 
 /** Claude Code 的 settings.json 结构（仅写需要的字段） */
@@ -51,43 +53,78 @@ export function buildClaudeSettings(
 
 /**
  * 原子写入 ~/.claude/settings.json
- * - 保留文件中所有其他字段（mcpServers, permissions, ...）
- * - 仅覆盖 env.* 字段
- * - 先写临时文件再 rename，避免半写状态
+ *
+ * 设计要点（关键 — v0.4.1 修订）：
+ * 1. 使用 jsonc-parser 解析，**保留注释、尾随逗号、字段顺序**
+ *    （普通 JSON.parse 会丢失注释并按字母序排序）
+ * 2. 仅替换 env 子树，**不重写其他顶层字段**（mcpServers / permissions / 等）
+ * 3. 用 modify() 拿到 edits，再用 applyEdits() 把 edits 应用到原文本
+ *    → 输出文本除 env 块外与输入**逐字节相同**
+ * 4. tmp + rename 原子替换
+ *
+ * 抛错：仅当 settings.json 完全无法解析（损坏严重到 jsonc-parser 也不行）
  */
 export function writeClaudeSettings(
   path: string,
   settings: ClaudeSettings
 ): void {
-  let existing: Record<string, unknown> = {};
+  let rawText = "";
+  let ast: Node | undefined;
+  let existingEnv: Record<string, unknown> = {};
+
   if (existsSync(path)) {
-    try {
-      const content = readFileSync(path, "utf-8");
-      // 兼容 JSON5 / 注释（Claude Code 的 settings.json 可能带注释）
-      existing = JSON.parse(content) as Record<string, unknown>;
-    } catch (e) {
+    rawText = readFileSync(path, "utf-8");
+    // 关键：用 jsonc-parser 解析，保留注释 / 尾随逗号
+    const errors: ParseError[] = [];
+    ast = parse(rawText, errors, {
+      allowTrailingComma: true,
+      disallowComments: false,
+    });
+    if (errors.length > 0) {
       throw new Error(
-        `Failed to parse existing ${path}: ${e instanceof Error ? e.message : e}\n` +
-          `Please fix the file manually or remove it.`
+        `Failed to parse existing ${path} (jsonc-parser error code ${errors[0]}):\n` +
+          `Please fix the file manually or remove it.\n` +
+          `Raw: ${rawText.slice(0, 200)}...`
       );
+    }
+    if (ast && typeof ast === "object") {
+      const envNode = (ast as unknown as Record<string, unknown>)["env"];
+      if (envNode && typeof envNode === "object") {
+        existingEnv = envNode as Record<string, unknown>;
+      }
     }
   }
 
-  // 合并：保留其他顶层字段，仅替换 env
-  const merged: Record<string, unknown> = {
-    ...existing,
-    env: {
-      ...((existing["env"] as Record<string, unknown> | undefined) ?? {}),
-      ...settings.env,
-    },
-  };
+  // 用 jsonc-parser 的 modify + applyEdits 在原文本上做精准编辑
+  // 保留所有其他字段、注释、格式
+  let edits: Edit[] = [];
+  if (ast) {
+    // 合并：env 新值覆盖 existing 的同名 key
+    const mergedEnv = { ...existingEnv, ...settings.env };
+    // 替换 env 子树（路径 ["env"]）
+    // 注意：ModificationOptions 不接受 allowTrailingComma，
+    // 但输出文本会按 jsonc-parser 默认的格式化（缩进 2 空格）
+    edits = modify(rawText, ["env"], mergedEnv, {});
+  } else {
+    // 文件不存在：直接写新 settings（作为完整文档）
+    rawText = JSON.stringify(settings, null, 2) + "\n";
+  }
 
+  // 如果有 edits，应用；否则直接用原 rawText
+  let finalText: string;
+  if (edits.length > 0) {
+    finalText = applyEdits(rawText, edits);
+  } else {
+    finalText = rawText;
+  }
+
+  // 原子写
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
   const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n", "utf-8");
+  writeFileSync(tmp, finalText, "utf-8");
   renameSync(tmp, path);
 }
 

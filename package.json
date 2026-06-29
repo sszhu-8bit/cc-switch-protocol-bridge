@@ -37,6 +37,7 @@
     "commander": "^12.1.0",
     "fastify": "^5.1.0",
     "js-yaml": "^4.1.0",
+    "jsonc-parser": "^3.3.1",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0"
   }

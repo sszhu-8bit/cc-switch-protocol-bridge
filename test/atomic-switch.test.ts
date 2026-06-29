@@ -308,3 +308,127 @@ describe("P0-4: edge cases", () => {
     expect(all.map((p) => p.id).sort()).toEqual(["p1", "p2"]);
   });
 });
+
+describe("P0-4 v0.4.2 修复: JSON 注释兼容（v0.4.1 会失败）", () => {
+  test("带 // 注释的 settings.json 不会让 use 命令失败", () => {
+    // 用户原 settings.json 有注释（v0.4.1 这里会抛 JSON.parse 错）
+    const raw = `{
+  // 用户自定义注释
+  "mcpServers": { "github": { "command": "npx" } },
+  "env": { "MY_VAR": "keep" }
+}`;
+    writeFileSync(TEST_DIR_HOLDER.claude, raw);
+
+    // 切换：不应抛错
+    expect(() =>
+      writeClaudeSettings(TEST_DIR_HOLDER.claude, {
+        env: {
+          ANTHROPIC_BASE_URL: "http://127.0.0.1:17821",
+          ANTHROPIC_AUTH_TOKEN: "x",
+          ANTHROPIC_MODEL: "sonnet",
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "sonnet",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "haiku",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "opus",
+        },
+      })
+    ).not.toThrow();
+
+    // 验证：注释保留在文件里
+    const afterRaw = readFileSync(TEST_DIR_HOLDER.claude, "utf-8");
+    expect(afterRaw).toContain("用户自定义注释");
+    expect(afterRaw).toContain("mcpServers");
+    expect(afterRaw).toContain("MY_VAR");
+    // 验证新值被写入
+    expect(afterRaw).toContain("ANTHROPIC_BASE_URL");
+  });
+
+  test("带 /* 块注释的 settings.json 也能处理", () => {
+    const raw = `{
+  /* 块注释 */
+  "permissions": { "allow": ["Bash"] },
+  "env": { "X": "1" }
+}`;
+    writeFileSync(TEST_DIR_HOLDER.claude, raw);
+
+    expect(() =>
+      writeClaudeSettings(TEST_DIR_HOLDER.claude, {
+        env: {
+          ANTHROPIC_BASE_URL: "http://x",
+          ANTHROPIC_AUTH_TOKEN: "x",
+          ANTHROPIC_MODEL: "x",
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "x",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "x",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "x",
+        },
+      })
+    ).not.toThrow();
+
+    const afterRaw = readFileSync(TEST_DIR_HOLDER.claude, "utf-8");
+    expect(afterRaw).toContain("块注释");
+    expect(afterRaw).toContain("permissions");
+  });
+
+  test("带尾随逗号的 settings.json 也能处理", () => {
+    const raw = `{
+  "env": {
+    "X": "1",
+  },
+}`;
+    writeFileSync(TEST_DIR_HOLDER.claude, raw);
+
+    expect(() =>
+      writeClaudeSettings(TEST_DIR_HOLDER.claude, {
+        env: {
+          ANTHROPIC_BASE_URL: "http://x",
+          ANTHROPIC_AUTH_TOKEN: "x",
+          ANTHROPIC_MODEL: "x",
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "x",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "x",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "x",
+        },
+      })
+    ).not.toThrow();
+
+    // 写入后还应包含原 env 字段
+    const afterRaw = readFileSync(TEST_DIR_HOLDER.claude, "utf-8");
+    expect(afterRaw).toContain("ANTHROPIC_BASE_URL");
+  });
+
+  test("完全损坏的 settings.json（不只是 JSON 错，是二进制）仍抛错", () => {
+    writeFileSync(TEST_DIR_HOLDER.claude, "这不是 JSON \x00\x01\x02");
+    expect(() =>
+      writeClaudeSettings(TEST_DIR_HOLDER.claude, {
+        env: {
+          ANTHROPIC_BASE_URL: "http://x",
+          ANTHROPIC_AUTH_TOKEN: "x",
+          ANTHROPIC_MODEL: "x",
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "x",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "x",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "x",
+        },
+      })
+    ).toThrow();
+  });
+
+  test("原始注释在写入后仍出现在文件里", () => {
+    const raw = `{
+  // 关键注释：mcpServers 必须保留
+  "mcpServers": { "github": { "command": "npx" } }
+}`;
+    writeFileSync(TEST_DIR_HOLDER.claude, raw);
+
+    writeClaudeSettings(TEST_DIR_HOLDER.claude, {
+      env: {
+        ANTHROPIC_BASE_URL: "http://x",
+        ANTHROPIC_AUTH_TOKEN: "x",
+        ANTHROPIC_MODEL: "x",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "x",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "x",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "x",
+      },
+    });
+
+    const after = readFileSync(TEST_DIR_HOLDER.claude, "utf-8");
+    expect(after).toContain("关键注释");
+  });
+});
