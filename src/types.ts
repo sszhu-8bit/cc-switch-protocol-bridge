@@ -11,7 +11,12 @@ export type AnthropicContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string | AnthropicContentBlock[]; is_error?: boolean };
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | AnthropicContentBlock[];
+      is_error?: boolean;
+    };
 
 export interface AnthropicMessagesRequest {
   model: string;
@@ -47,9 +52,22 @@ export interface AnthropicMessagesResponse {
 export type AnthropicStreamEvent =
   | { type: "message_start"; message: Partial<AnthropicMessagesResponse> }
   | { type: "content_block_start"; index: number; content_block: AnthropicContentBlock }
-  | { type: "content_block_delta"; index: number; delta: { type: "text_delta"; text: string } | { type: "input_json_delta"; partial_json: string } }
+  | {
+      type: "content_block_delta";
+      index: number;
+      delta:
+        | { type: "text_delta"; text: string }
+        | { type: "input_json_delta"; partial_json: string };
+    }
   | { type: "content_block_stop"; index: number }
-  | { type: "message_delta"; delta: { stop_reason: AnthropicMessagesResponse["stop_reason"]; stop_sequence: string | null }; usage?: { output_tokens: number } }
+  | {
+      type: "message_delta";
+      delta: {
+        stop_reason: AnthropicMessagesResponse["stop_reason"];
+        stop_sequence: string | null;
+      };
+      usage?: { output_tokens: number };
+    }
   | { type: "message_stop" }
   | { type: "ping" }
   | { type: "error"; error: { type: string; message: string } };

@@ -9,13 +9,7 @@
 // 端到端的 systemctl restart 验证在 smoke-test.sh 里做。
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import {
-  writeFileSync,
-  readFileSync,
-  mkdirSync,
-  rmSync,
-  existsSync,
-} from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -48,15 +42,15 @@ beforeEach(() => {
   TEST_DIR_HOLDER.db = join(dir, "cc-switch.db");
   TEST_DIR_HOLDER.claude = join(dir, ".claude/settings.json");
   mkdirSync(join(dir, ".claude"), { recursive: true });
-  process.env["CC_SWITCH_MASTER_KEY"] = TEST_KEY;
-  process.env["CC_SWITCH_DB"] = TEST_DIR_HOLDER.db;
+  process.env.CC_SWITCH_MASTER_KEY = TEST_KEY;
+  process.env.CC_SWITCH_DB = TEST_DIR_HOLDER.db;
   _resetForTests();
 });
 
 afterEach(() => {
   _resetForTests();
-  delete process.env["CC_SWITCH_MASTER_KEY"];
-  delete process.env["CC_SWITCH_DB"];
+  delete process.env.CC_SWITCH_MASTER_KEY;
+  delete process.env.CC_SWITCH_DB;
   try {
     if (existsSync(TEST_DIR_HOLDER.path)) {
       rmSync(TEST_DIR_HOLDER.path, { recursive: true, force: true });
@@ -86,7 +80,14 @@ describe("P0-4: settings.json 备份与回滚", () => {
 }`;
     // 先写一个新版本
     writeClaudeSettings(TEST_DIR_HOLDER.claude, {
-      env: { ANTHROPIC_BASE_URL: "http://wrong:9999", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_MODEL: "x", ANTHROPIC_DEFAULT_SONNET_MODEL: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "x", ANTHROPIC_DEFAULT_OPUS_MODEL: "x" },
+      env: {
+        ANTHROPIC_BASE_URL: "http://wrong:9999",
+        ANTHROPIC_AUTH_TOKEN: "x",
+        ANTHROPIC_MODEL: "x",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "x",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "x",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "x",
+      },
     });
     // 再用 restoreClaudeSettings 写回原始
     restoreClaudeSettings(TEST_DIR_HOLDER.claude, raw);
@@ -172,13 +173,7 @@ describe("P0-4: 完整回滚流程模拟", () => {
     // 1. 改 DB
     setCurrentProvider("kimi");
     // 2. 改 settings
-    writeClaudeSettings(
-      TEST_DIR_HOLDER.claude,
-      buildClaudeSettings(
-        (await listProviders()).find((p) => p.id === "kimi")!,
-        "http://127.0.0.1:17821"
-      )
-    );
+    writeClaudeSettings(TEST_DIR_HOLDER.claude, buildClaudeSettings("http://127.0.0.1:17821"));
 
     expect(getCurrentProviderId()).toBe("kimi");
     expect(existsSync(TEST_DIR_HOLDER.claude)).toBe(true);
@@ -237,23 +232,14 @@ describe("P0-4: 完整回滚流程模拟", () => {
 
     setCurrentProvider("old-provider");
     // 写一份 settings.json 模拟已存在
-    writeFileSync(
-      TEST_DIR_HOLDER.claude,
-      JSON.stringify({ env: { OTHER: "preserve-me" } })
-    );
+    writeFileSync(TEST_DIR_HOLDER.claude, JSON.stringify({ env: { OTHER: "preserve-me" } }));
     const originalSettings = readClaudeSettingsRaw(TEST_DIR_HOLDER.claude);
     expect(originalSettings).not.toBeNull();
 
     // 模拟切换：
     const oldProviderId = getCurrentProviderId(); // 快照
     setCurrentProvider("new-provider"); // DB 改
-    writeClaudeSettings(
-      TEST_DIR_HOLDER.claude,
-      buildClaudeSettings(
-        (await listProviders()).find((p) => p.id === "new-provider")!,
-        "http://127.0.0.1:17821"
-      )
-    ); // settings 改
+    writeClaudeSettings(TEST_DIR_HOLDER.claude, buildClaudeSettings("http://127.0.0.1:17821")); // settings 改
 
     // 现在假设 systemctl restart 失败，触发回滚：
     setCurrentProvider(oldProviderId); // DB 回滚
@@ -262,9 +248,7 @@ describe("P0-4: 完整回滚流程模拟", () => {
     expect(getCurrentProviderId()).toBe("old-provider");
     expect(readClaudeSettingsRaw(TEST_DIR_HOLDER.claude)).toBe(originalSettings);
     // 用户原始数据完整保留
-    expect(JSON.parse(readFileSync(TEST_DIR_HOLDER.claude, "utf-8")).env.OTHER).toBe(
-      "preserve-me"
-    );
+    expect(JSON.parse(readFileSync(TEST_DIR_HOLDER.claude, "utf-8")).env.OTHER).toBe("preserve-me");
   });
 });
 
@@ -274,7 +258,14 @@ describe("P0-4: edge cases", () => {
     writeFileSync(TEST_DIR_HOLDER.claude, "{ broken");
     expect(() =>
       writeClaudeSettings(TEST_DIR_HOLDER.claude, {
-        env: { ANTHROPIC_BASE_URL: "http://x", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_MODEL: "x", ANTHROPIC_DEFAULT_SONNET_MODEL: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "x", ANTHROPIC_DEFAULT_OPUS_MODEL: "x" },
+        env: {
+          ANTHROPIC_BASE_URL: "http://x",
+          ANTHROPIC_AUTH_TOKEN: "x",
+          ANTHROPIC_MODEL: "x",
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "x",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "x",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "x",
+        },
       })
     ).toThrow(/Failed to parse existing/);
   });

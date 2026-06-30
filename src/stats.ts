@@ -67,10 +67,7 @@ export class Stats {
     }
 
     // 按状态码累计
-    this.byStatusCode.set(
-      statusCode,
-      (this.byStatusCode.get(statusCode) ?? 0) + 1
-    );
+    this.byStatusCode.set(statusCode, (this.byStatusCode.get(statusCode) ?? 0) + 1);
   }
 
   /**

@@ -9,12 +9,17 @@ import {
   mapUpstreamStatusToErrorType,
   type AnthropicErrorType,
 } from "./converter/streaming.js";
-import { callUpstream, callUpstreamStream, parseOpenAIStream, UpstreamError } from "./providers/client.js";
+import {
+  callUpstream,
+  callUpstreamStream,
+  parseOpenAIStream,
+  UpstreamError,
+} from "./providers/client.js";
 import { logger } from "./logger.js";
 import { Stats } from "./stats.js";
+import { assertValidConfig, getCurrentProvider } from "./config.js";
 import type { AnthropicMessagesRequest } from "./types.js";
-import type { AppConfig, ProviderConfig } from "./types.js";
-import { getCurrentProvider } from "./config.js";
+import type { AppConfig } from "./types.js";
 
 export async function buildServer(
   config: AppConfig,
@@ -53,7 +58,7 @@ export async function buildServer(
     }
 
     const body = req.body as AnthropicMessagesRequest;
-    if (!body || !body.model || !Array.isArray(body.messages)) {
+    if (!body?.model || !Array.isArray(body.messages)) {
       stats.record(provider.id, 400);
       return reply.code(400).send({
         type: "error",
@@ -106,9 +111,7 @@ export async function buildServer(
         const errType = classifyStreamError(err);
         const errMsg = sanitizeErrorMessage(err);
         reply.raw.write(
-          formatAnthropicSSE([
-            { type: "error", error: { type: errType, message: errMsg } },
-          ])
+          formatAnthropicSSE([{ type: "error", error: { type: errType, message: errMsg } }])
         );
         // 状态码：upstream 错误按 status 透传；网络/超时统一 502
         const streamStatus = err instanceof UpstreamError ? err.status : 502;
@@ -187,10 +190,7 @@ function classifyStreamError(err: unknown): AnthropicErrorType {
     return "upstream_unavailable";
   }
   // AbortError / TimeoutError
-  if (
-    err instanceof Error &&
-    (err.name === "AbortError" || err.name === "TimeoutError")
-  ) {
+  if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
     return "timeout_error";
   }
   return "api_error";
@@ -209,10 +209,7 @@ function sanitizeErrorMessage(err: unknown): string {
   if (err instanceof TypeError) {
     return "upstream unreachable (network error)";
   }
-  if (
-    err instanceof Error &&
-    (err.name === "AbortError" || err.name === "TimeoutError")
-  ) {
+  if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
     return "upstream timeout";
   }
   return "internal error";

@@ -13,6 +13,9 @@
     "build:debug": "bun build src/cli.ts --target=node --outdir=dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "lint": "biome check src/ test/",
+    "lint:fix": "biome check --write --unsafe src/ test/",
+    "format": "biome format --write src/ test/",
     "start": "bun run src/cli.ts serve"
   },
   "keywords": [

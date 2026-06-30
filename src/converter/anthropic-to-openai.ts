@@ -14,9 +14,7 @@ import type {
 /**
  * 将 Anthropic system 字段（string 或 array）压平成 OpenAI 单条 system 消息
  */
-function flattenSystem(
-  system: AnthropicMessagesRequest["system"]
-): string | undefined {
+function flattenSystem(system: AnthropicMessagesRequest["system"]): string | undefined {
   if (!system) return undefined;
   if (typeof system === "string") return system;
   // array 形式，提取所有 text 字段拼接，丢弃 cache_control
@@ -27,9 +25,10 @@ function flattenSystem(
  * 将 Anthropic content block 数组转换为 OpenAI content 字符串
  * 多模态/工具调用会在 tool_calls / 多条消息里表达
  */
-function convertAssistantContent(
-  content: AnthropicContentBlock[]
-): { text: string | null; tool_calls: NonNullable<OpenAIMessage["tool_calls"]> } {
+function convertAssistantContent(content: AnthropicContentBlock[]): {
+  text: string | null;
+  tool_calls: NonNullable<OpenAIMessage["tool_calls"]>;
+} {
   const textParts: string[] = [];
   const toolCalls: NonNullable<OpenAIMessage["tool_calls"]> = [];
   for (const block of content) {

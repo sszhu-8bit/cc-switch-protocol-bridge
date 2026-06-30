@@ -30,8 +30,14 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Type check
-        
+
         run: bun run typecheck
+
+      - name: Lint (biome)
+
+        run: bun run lint
+        # 注意：不跑 lint:fix — biome 2 自动 fix 已知 bug 会误删类成员
+        # 我们只让 lint 报告问题，不自动改
 
       - name: Smoke test (help)
         

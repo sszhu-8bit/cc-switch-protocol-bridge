@@ -4,8 +4,6 @@
 **仓库**: https://github.com/sszhu-8bit/cc-switch-protocol-bridge
 **最后更新**: 2026-06-29
 
----
-
 ## 图例
 
 - ✅ **已完成** (shipped)
@@ -110,88 +108,102 @@
 
 ---
 
-## v0.4.0 — 推荐下一个版本 🟡
+## v0.4.0 — 稳定补丁系列 ✅ 已完成
 
-**目标**: 修复评审报告 P0 剩余问题 + 提升稳定性
+发布 5 个补丁版，按 P0 风险递降修复：
 
-### 候选功能（按优先级）
+| 版本 | 修复 | 对应 REVIEW 项 |
+|---|---|---|
+| **v0.4.0** | 流式断流恢复：上游断开时先发 `message_stop` 再发 `error`，让客户端干净收尾 | P0-3 |
+| **v0.4.1** | `provider use` 事务化：快照 → 改 DB → 改 settings → restart → /health check，失败回滚 | P0-4 |
+| **v0.4.2** | `~/.claude/settings.json` JSON5 兼容：用 `jsonc-parser` 保留注释 / 尾随逗号 / 字段顺序 | P0-4 漏洞 |
+| **v0.4.3** | 流式工具调用状态机：延迟 `content_block_start` 等 `id+name` 都到；处理 DeepSeek / Qwen 分块顺序 | P1-2 |
+| **v0.4.4** | `/stats` 端点：JSON metrics（总数 / 成功 / 失败 / 按 provider / 按状态码） | P1-4 |
 
-#### P0-3: 流式断流恢复
-**问题**: `src/server.ts:65-86` 中上游断开时只写 error event，客户端可能"已收部分内容丢失 + 错误码解析失败"。
+**发布日期**: 2026-06-29（同日连发）
+**Releases**:
+- v0.4.0: https://github.com/sszhu-8bit/cc-switch-protocol-bridge/releases/tag/v0.4.0
+- v0.4.1: https://github.com/sszhu-8bit/cc-switch-protocol-bridge/releases/tag/v0.4.1
+- v0.4.2: https://github.com/sszhu-8bit/cc-switch-protocol-bridge/releases/tag/v0.4.2
+- v0.4.3: https://github.com/sszhu-8bit/cc-switch-protocol-bridge/releases/tag/v0.4.3
+- v0.4.4: https://github.com/sszhu-8bit/cc-switch-protocol-bridge/releases/tag/v0.4.4
 
-**方案**:
-- 检测到上游断开时，先发 `message_stop` 事件再发 `error` 事件
-- 让 Claude Code 客户端知道"已收到的部分是完整的"
-- 错误信息用 Anthropic 标准格式（`overloaded_error` / `upstream_unavailable`）
+### 投入
+- 85/85 测试通过（v0.4.4 完成时）
+- 增量代码：~500 行
 
-**预估**: ~100 行代码 + 3 个测试
-
-#### P0-4: provider use 原子化
-**问题**: 写 `~/.claude/settings.json` 和重启 systemd 不是事务。重启失败时 Claude Code 静默。
-
-**方案**:
-- 写入 settings.json **之前**先验证 systemd 启动成功
-- 失败时回滚 settings.json
-- 或者：写完 settings.json 等 1 秒，验证 `/health` 返回 200
-
-**预估**: ~50 行 + 2 个测试
-
-#### P1-2: 流式工具调用状态机健壮性
-**问题**: `src/converter/streaming.ts:64-95` 中 `content_block_start` 在收到 `id` 之前就发出去了（`id: ""`）。
-
-**方案**:
-- 延迟 `content_block_start` 直到有完整的 `id` + `name`
-- 处理 `tool_use` 中途切分的不规则 chunk
-
-**预估**: ~50 行 + 4 个测试
-
-#### P1-4: 简单 metrics 端点
-**方案**: `/stats` 返回 JSON：
-```json
-{
-  "uptime_seconds": 3600,
-  "total_requests": 1234,
-  "successful_requests": 1200,
-  "failed_requests": 34,
-  "current_provider": "deepseek",
-  "provider_health": { "deepseek": "healthy", "kimi": "unhealthy" }
-}
-```
-
-**预估**: ~80 行 + 2 个测试
-
-### 建议组合
-**v0.4.0** = P0-3 + P0-4 + P1-2 + P1-4 = ~280 行
-
-预计 3-5 天工作量。
+### 修复的影响
+- v0.4.0 + v0.4.1：让 `cc-switch provider use` 真正可用，失败可回滚
+- v0.4.2：用户的 settings.json 不再被改坏
+- v0.4.3：让 MiniMax / Qwen 等"分块"实现的工具调用能正确转换
+- v0.4.4：能看见代理在干什么
 
 ---
 
-## v0.5.0 — 观察性与可维护性 ⚪
+## v0.5.0 — 工程化 🟡 推荐
 
-### 候选功能
+**目标**: 提升可维护性、可观察性、稳健性（非功能需求）
 
-#### P1-1: 协议转换边界日志
-在 `src/converter/anthropic-to-openai.ts:46-49` 丢弃字段时记录 debug 日志。
-- 预估: ~10 行
+### 已计划的功能
 
-#### P1-5: 可复现构建
-CI 加 `SOURCE_DATE_EPOCH=...`，使 RPM 文件名/内容稳定。
-- 预估: 1 行 spec 改动
+#### P2-1: zod 配置校验 ✅
+**问题**: 损坏的 DB / 缺字段的 config → 运行时崩，错误信息不友好。
 
-#### CI 增强
-- 加 `biome` / `prettier` lint
-- 加 `npm audit` / `bun audit`
-- typecheck 跑在多 Node 版本
+**方案**:
+- 启动时用 zod 校验整个 AppConfig
+- DB 缺失字段用默认值填充（不破坏老数据）
+- 真正的损坏（手工改 DB）启动失败并报清晰错误
 
-**预估**: 半周
+**状态**: 已完成（v0.5.0）
 
-#### 测试覆盖率提升
-- HTTP 服务器层集成测试（用 `app.inject()`）
-- 真实流式上游的 mock 测试
-- 目标: 70% 覆盖率
+#### P2-2: 集成测试 ✅
+**问题**: server 层 0 集成测试，所有路由逻辑靠单元测试 mock。
 
-**预估**: 1 周
+**方案**:
+- 用 fastify `app.inject()` 测 server 层
+- 覆盖 /health / /stats / /v1/messages / /v1/models
+- 不需要真端口 / 真进程
+
+**状态**: 已完成（v0.5.0）
+
+#### CI 加 lint ✅
+**问题**: 无静态检查，PR 容易引入风格 / 可读性问题。
+
+**方案**:
+- 加 biomejs/biome
+- `bun run lint` 跑 lint check
+- CI 失败 = lint 失败
+
+**状态**: 已完成（v0.5.0）
+
+### 实际投入
+- 123/123 测试通过
+- 增量代码：~700 行（zod schema 100 + stats 模块 100 + 集成测试 500）
+
+---
+
+## 未来版本
+
+### v0.6.0 — 厂商生态扩展 ⚪
+
+- 添加 MiniMax / DeepSeek / Kimi 厂商**预设**（一行 `--preset xxx` 自动填 base_url + 默认模型）
+- 文档化每个厂商的特殊处理（thinking / 1M context / vision）
+
+### v0.7.0 — 高级稳定性 ⚪
+
+- 性能基准：模拟 1000 QPS 跑 1 小时，监控内存增长
+- systemd hardening：MemoryDenyWriteExecute / SystemCallFilter / CapabilityBoundingSet
+- 真实集成测试：mock OpenAI / DeepSeek 真实响应
+- 覆盖率：> 80%
+
+### v1.0.0 — 工业级 ⚪
+
+- 公开发布公告（v0.4.x 系列已经在 0% crash rate 跑了几个月）
+- 完整文档（FAQ / TROUBLESHOOTING / ARCHITECTURE）
+- Homebrew / deb 包（覆盖 Debian / Ubuntu）
+- Docker 镜像
+- Prometheus `/metrics` 端点（v0.4.4 的 stats 是 JSON，Prometheus 是 text format）
+- 真实厂商 E2E 测试套件（用 sandbox API key 跑通整条链路）
 
 ---
 
@@ -275,8 +287,13 @@ CI 加 `SOURCE_DATE_EPOCH=...`，使 RPM 文件名/内容稳定。
 | v0.1.0 | 2026-06-27 | 协议转换 + systemd + RPM |
 | v0.2.0 | 2026-06-27 | provider use 自动切换 |
 | v0.3.0 | 2026-06-29 | SQLite + 加密 |
-| v0.4.0 | 待定 | P0-3, P0-4, P1-2, P1-4 |
-| v0.5.0 | 待定 | 观察性 + 维护性 |
+| v0.4.0 | 2026-06-29 | P0-3 流式断流恢复 |
+| v0.4.1 | 2026-06-29 | P0-4 事务化 provider use |
+| v0.4.2 | 2026-06-29 | JSON5 兼容的 settings.json 合并 |
+| v0.4.3 | 2026-06-29 | P1-2 流式工具调用状态机 |
+| v0.4.4 | 2026-06-29 | P1-4 /stats 端点 |
+| v0.5.0 | 2026-06-29 | P2-1 zod + P2-2 集成测试 + lint |
+| v0.6.0 | 待定 | 厂商预设（MiniMax / DeepSeek / Kimi） |
 | v1.0.0 | 待定 | 工业级 + 多发行版 |
 
 ---
@@ -299,8 +316,33 @@ CI 加 `SOURCE_DATE_EPOCH=...`，使 RPM 文件名/内容稳定。
 
 ## 下一步行动（推荐顺序）
 
-1. **现在** (今天): 安装 v0.3.0 到 AlmaLinux 9.7 验证加密流程
-2. **本周**: 实现 v0.4.0 P0-3（流式断流恢复）
+### ✅ 已完成到 v0.5.0
+
+- v0.1.0 - v0.4.4 + v0.5.0 共 9 个版本
+- 123/123 测试通过
+- TypeScript strict + zod + biome lint
+- 完整文档（README + REVIEW + ROADMAP + COMPARISON + AGENTS）
+- systemd + RPM + GitHub Actions CI
+
+### 🟡 推荐下一步（v0.6.0）
+
+按优先级：
+
+1. **去 AlmaLinux 9.7 真实验证**所有 v0.4.x 修复
+   - provider use 原子化（switch provider 不卡）
+   - 流式断流（连接 DeepSeek 跑长对话）
+   - 工具调用（让 Claude Code 读文件）
+   - /stats 端点（看 metrics）
+
+2. **v0.6.0 厂商预设**（如果验证 OK 后）
+   - 添加 `provider add --preset deepseek/kimi/minimax`
+   - 自动填 base_url、wire_api、默认模型
+   - 文档化每个厂商的 quirks
+
+### ⚪ 未来路线（不需要现在）
+
+- v0.7.0：覆盖率提升 + 系统安全 hardening
+- v1.0.0：公网部署支持 + 多发行版 + 完整文档
 3. **下周**: P0-4 + P1-2
 4. **月底**: 发 v0.4.0
 5. **未来**: 视使用情况决定 v0.5.0 优先级

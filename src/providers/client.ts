@@ -77,7 +77,11 @@ export async function callUpstreamStream(
 ): Promise<ReadableStream<Uint8Array>> {
   const url = buildUpstreamUrl(provider, true);
   const headers = buildHeaders(provider);
-  const mapped: OpenAIChatRequest = { ...req, stream: true, model: resolveModel(provider, req.model) };
+  const mapped: OpenAIChatRequest = {
+    ...req,
+    stream: true,
+    model: resolveModel(provider, req.model),
+  };
 
   const resp = await fetch(url, {
     method: "POST",
@@ -122,8 +126,9 @@ export async function* parseOpenAIStream(
 
     buffer += decoder.decode(value, { stream: true });
     // 按 SSE 事件边界（一个或多个连续 \n\n）切分
-    let idx: number;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+    while (true) {
+      const idx = buffer.indexOf("\n\n");
+      if (idx === -1) break;
       const rawEvent = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 2);
       const dataLines: string[] = [];

@@ -62,28 +62,36 @@ describe("正常流式响应", () => {
 
     // 第一个 chunk: 角色
     allEvents.push(
-      ...converter.feed(
-        makeChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })
-      ).map((e) => formatAnthropicSSE([e]))
+      ...converter
+        .feed(
+          makeChunk({
+            choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+          })
+        )
+        .map((e) => formatAnthropicSSE([e]))
     );
 
     // 文本增量
     allEvents.push(
-      ...converter.feed(
-        makeChunk({ choices: [{ index: 0, delta: { content: "Hello" }, finish_reason: null }] })
-      ).map((e) => formatAnthropicSSE([e]))
+      ...converter
+        .feed(
+          makeChunk({ choices: [{ index: 0, delta: { content: "Hello" }, finish_reason: null }] })
+        )
+        .map((e) => formatAnthropicSSE([e]))
     );
     allEvents.push(
-      ...converter.feed(
-        makeChunk({ choices: [{ index: 0, delta: { content: " world" }, finish_reason: null }] })
-      ).map((e) => formatAnthropicSSE([e]))
+      ...converter
+        .feed(
+          makeChunk({ choices: [{ index: 0, delta: { content: " world" }, finish_reason: null }] })
+        )
+        .map((e) => formatAnthropicSSE([e]))
     );
 
     // 结束
     allEvents.push(
-      ...converter.feed(
-        makeChunk({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })
-      ).map((e) => formatAnthropicSSE([e]))
+      ...converter
+        .feed(makeChunk({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }))
+        .map((e) => formatAnthropicSSE([e]))
     );
     allEvents.push(...converter.end().map((e) => formatAnthropicSSE([e])));
 
@@ -109,7 +117,9 @@ describe("P0-3: 流式异常中断 (abort)", () => {
 
     // 模拟：上游已发送 message_start + content_block_start + 一些 deltas
     converter.feed(
-      makeChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })
+      makeChunk({
+        choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+      })
     );
     converter.feed(
       makeChunk({ choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: null }] })
@@ -157,7 +167,9 @@ describe("P0-3: 流式异常中断 (abort)", () => {
   test("abort() 之后再调 end() 是 no-op（状态机已终态）", () => {
     const converter = new OpenAIToAnthropicStream();
     converter.feed(
-      makeChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })
+      makeChunk({
+        choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+      })
     );
     const abortEvents = converter.abort();
     expect(abortEvents.length).toBeGreaterThan(0);
@@ -182,7 +194,9 @@ describe("P0-3: 流式异常中断 (abort)", () => {
     // 这个测试模拟这个序列，验证最终输出顺序
     const converter = new OpenAIToAnthropicStream();
     converter.feed(
-      makeChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })
+      makeChunk({
+        choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+      })
     );
     converter.feed(
       makeChunk({ choices: [{ index: 0, delta: { content: "partial" }, finish_reason: null }] })

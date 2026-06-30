@@ -33,12 +33,7 @@ program
   .version("0.3.0");
 
 // === Root flags ===
-program
-  .option(
-    "--db <path>",
-    "SQLite database path",
-    process.env["CC_SWITCH_DB"] ?? DEFAULT_DB_PATH
-  );
+program.option("--db <path>", "SQLite database path", process.env.CC_SWITCH_DB ?? DEFAULT_DB_PATH);
 
 // === serve ===
 program
@@ -51,9 +46,7 @@ program
     if (opts.listenAddress) config.listen_address = opts.listenAddress;
     if (opts.listenPort) config.listen_port = parseInt(opts.listenPort, 10);
     if (!config.current_provider || config.providers.length === 0) {
-      logger.error(
-        "no provider configured. Run `cc-switch provider add` first."
-      );
+      logger.error("no provider configured. Run `cc-switch provider add` first.");
       process.exit(1);
     }
     await startServer(config);
@@ -169,9 +162,9 @@ providerCmd
   )
   .argument("<id>", "Provider ID to activate")
   .option(
-    "--claude-settings <path>",
+    `--claude-settings <path>`,
     "Claude Code settings.json path",
-    (process.env["HOME"] ?? "") + "/.claude/settings.json"
+    `${process.env.HOME ?? ""}/.claude/settings.json`
   )
   .option("--no-restart", "Don't restart systemd service")
   .option("--no-write-claude", "Skip writing ~/.claude/settings.json")
@@ -179,7 +172,9 @@ providerCmd
     const config = await loadConfig();
     const provider = await getProvider(config, id);
     if (!provider) {
-      console.error(`Provider '${id}' not found. Run 'cc-switch provider list' to see available providers.`);
+      console.error(
+        `Provider '${id}' not found. Run 'cc-switch provider list' to see available providers.`
+      );
       process.exit(1);
     }
 
@@ -202,7 +197,7 @@ providerCmd
       // 步骤 2: 改 ~/.claude/settings.json
       if (opts.writeClaude) {
         const proxyBaseUrl = `http://${config.listen_address}:${config.listen_port}`;
-        const settings = buildClaudeSettings(provider, proxyBaseUrl);
+        const settings = buildClaudeSettings(proxyBaseUrl);
         writeClaudeSettings(opts.claudeSettings, settings);
         settingsWritten = true;
         console.log(`✓ Updated ${opts.claudeSettings} (BASE_URL=${proxyBaseUrl})`);
@@ -242,9 +237,7 @@ providerCmd
       }
     } catch (err) {
       // === P0-4 回滚 ===
-      console.error(
-        `\n✗ Switch failed: ${err instanceof Error ? err.message : err}`
-      );
+      console.error(`\n✗ Switch failed: ${err instanceof Error ? err.message : err}`);
       console.error(`  Rolling back...`);
       try {
         if (settingsWritten && oldClaudeSettingsRaw !== null) {
@@ -257,7 +250,9 @@ providerCmd
             unlinkSync(opts.claudeSettings);
             console.error(`  ✓ Removed new ${opts.claudeSettings}`);
           } catch {
-            console.error(`  ⚠ Could not remove new ${opts.claudeSettings} (manual cleanup may be needed)`);
+            console.error(
+              `  ⚠ Could not remove new ${opts.claudeSettings} (manual cleanup may be needed)`
+            );
           }
         }
         if (dbChanged) {
@@ -284,7 +279,9 @@ providerCmd
     }
 
     console.log(`\nNow using: ${provider.name} (${provider.vendor})`);
-    console.log(`Models: sonnet -> ${provider.models.sonnet ?? "(default)"}, opus -> ${provider.models.opus ?? "(default)"}, haiku -> ${provider.models.haiku ?? "(default)"}`);
+    console.log(
+      `Models: sonnet -> ${provider.models.sonnet ?? "(default)"}, opus -> ${provider.models.opus ?? "(default)"}, haiku -> ${provider.models.haiku ?? "(default)"}`
+    );
   });
 
 /**

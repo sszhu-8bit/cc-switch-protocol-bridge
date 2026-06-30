@@ -12,6 +12,7 @@ import {
   setSetting,
   deleteProvider as dbDeleteProvider,
 } from "./store/db.js";
+import { validateForStartup } from "./config-schema.js";
 import type { AppConfig, ProviderConfig } from "./types.js";
 
 /** 兼容层：保留旧函数签名 */
@@ -50,11 +51,20 @@ export async function getProvider(
   return config.providers.find((p) => p.id === id);
 }
 
-export async function getCurrentProvider(
-  config: AppConfig
-): Promise<ProviderConfig | undefined> {
+export async function getCurrentProvider(config: AppConfig): Promise<ProviderConfig | undefined> {
   if (!config.current_provider) return undefined;
   return config.providers.find((p) => p.id === config.current_provider);
+}
+
+/**
+ * 强校验：startServer 前调用一次。
+ * 不通过会抛错，进程退出 1。
+ */
+export function assertValidConfig(config: AppConfig): void {
+  const result = validateForStartup(config);
+  if (!result.ok) {
+    throw new Error(`Configuration validation failed:\n${result.error}`);
+  }
 }
 
 export { deleteProvider as _deleteProvider } from "./store/db.js";

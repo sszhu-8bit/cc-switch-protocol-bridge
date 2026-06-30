@@ -2,7 +2,6 @@
 // 这是最复杂的部分。Claude Code 默认发送 stream: true 请求。
 
 import type {
-  AnthropicContentBlock,
   AnthropicMessagesResponse,
   AnthropicStreamEvent,
   OpenAIStreamChunk,
@@ -24,12 +23,12 @@ import type {
 export class OpenAIToAnthropicStream {
   private msgId: string = "";
   private model: string = "";
-  private inputTokens: number = 0;
   private outputTokens: number = 0;
 
   /** 当前活跃的 text content block */
   private textBlockIndex: number = -1;
   private textBlockStarted: boolean = false;
+  private textBuffer: string = "";
 
   /**
    * Tool call 状态机（P1-2 关键改进）
@@ -72,16 +71,7 @@ export class OpenAIToAnthropicStream {
   private finished: boolean = false;
 
   /** 累计的工具调用最终 finish_reason */
-  private finalFinishReason:
-    | "end_turn"
-    | "max_tokens"
-    | "tool_use"
-    | "stop_sequence"
-    | null = null;
-
-  /** 累积的文本（用于最终 fallback） */
-  private textBuffer: string = "";
-
+  private finalFinishReason: "end_turn" | "max_tokens" | "tool_use" | "stop_sequence" | null = null;
 
   /**
    * 处理一个 OpenAI 流式 chunk，返回一个或多个 Anthropic 事件
@@ -238,11 +228,14 @@ export class OpenAIToAnthropicStream {
     }
 
     // 处理 usage（OpenAI 在最后一个 chunk 的独立字段里）
-    if ((chunk as unknown as { usage?: { prompt_tokens: number; completion_tokens: number } }).usage) {
-      const u = (chunk as unknown as {
-        usage: { prompt_tokens: number; completion_tokens: number };
-      }).usage;
-      this.inputTokens = u.prompt_tokens;
+    if (
+      (chunk as unknown as { usage?: { prompt_tokens: number; completion_tokens: number } }).usage
+    ) {
+      const u = (
+        chunk as unknown as {
+          usage: { prompt_tokens: number; completion_tokens: number };
+        }
+      ).usage;
       this.outputTokens = u.completion_tokens;
     }
 
@@ -336,9 +329,7 @@ function mapFinishReason(
  * 将 Anthropic 事件数组序列化为 Anthropic 官方 SSE 格式
  */
 export function formatAnthropicSSE(events: AnthropicStreamEvent[]): string {
-  return events
-    .map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`)
-    .join("");
+  return events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join("");
 }
 
 /**
@@ -346,16 +337,15 @@ export function formatAnthropicSSE(events: AnthropicStreamEvent[]): string {
  * https://docs.anthropic.com/en/api/errors
  */
 export type AnthropicErrorType =
-  | "api_error"           // 通用服务端错误
-  | "overloaded_error"    // 429 / 503：上游过载
-  | "rate_limit_error"    // 429：限流
+  | "api_error" // 通用服务端错误
+  | "overloaded_error" // 429 / 503：上游过载
+  | "rate_limit_error" // 429：限流
   | "authentication_error" // 401 / 403：认证失败
-  | "permission_error"    // 403：权限不足
-  | "not_found_error"     // 404：模型 / 端点不存在
+  | "permission_error" // 403：权限不足
+  | "not_found_error" // 404：模型 / 端点不存在
   | "invalid_request_error" // 400：请求格式错
-  | "timeout_error"       // 上游超时
-  | "upstream_unavailable" // 502/503/504：上游不可达
-  ;
+  | "timeout_error" // 上游超时
+  | "upstream_unavailable"; // 502/503/504：上游不可达
 
 /**
  * 将上游 HTTP 状态码映射到 Anthropic 错误类型

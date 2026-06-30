@@ -10,18 +10,10 @@
 // 7. content_block_start 一定携带完整 id + name
 
 import { describe, expect, test } from "bun:test";
-import {
-  OpenAIToAnthropicStream,
-  formatAnthropicSSE,
-} from "../src/converter/streaming.ts";
-import type {
-  AnthropicStreamEvent,
-  OpenAIStreamChunk,
-} from "../src/types.ts";
+import { OpenAIToAnthropicStream, formatAnthropicSSE } from "../src/converter/streaming.ts";
+import type { AnthropicStreamEvent, OpenAIStreamChunk } from "../src/types.ts";
 
-function makeChunk(
-  overrides: Partial<OpenAIStreamChunk> = {}
-): OpenAIStreamChunk {
+function makeChunk(overrides: Partial<OpenAIStreamChunk> = {}): OpenAIStreamChunk {
   return {
     id: "chatcmpl-test",
     object: "chat.completion.chunk",

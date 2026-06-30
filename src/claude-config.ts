@@ -5,7 +5,6 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "
 import { dirname } from "node:path";
 import { parse, modify, applyEdits } from "jsonc-parser";
 import type { Node, Edit, ParseError } from "jsonc-parser";
-import type { ProviderConfig } from "./types.js";
 
 /** Claude Code 的 settings.json 结构（仅写需要的字段） */
 interface ClaudeSettings {
@@ -26,27 +25,19 @@ interface ClaudeSettings {
  * 关键：ANTHROPIC_BASE_URL 始终指向本地 proxy (127.0.0.1:<port>)，
  * 真正的 token / 模型名映射由 proxy 在转发时处理。
  */
-export function buildClaudeSettings(
-  provider: ProviderConfig,
-  proxyBaseUrl: string
-): ClaudeSettings {
-  // 决定三个角色用哪个模型
-  // 客户端发 "sonnet" / "opus" / "haiku" 时，proxy 端会按 providers[].models 映射
-  // 所以这里只写角色名即可
-  const roleModel = {
-    sonnet: "sonnet",
-    opus: "opus",
-    haiku: "haiku",
-  };
+export function buildClaudeSettings(proxyBaseUrl: string): ClaudeSettings {
+  // 把当前代理配置翻译成 Claude Code 期望的 settings.json
+  // 关键：ANTHROPIC_BASE_URL 始终指向本地 proxy (127.0.0.1:<port>)，
+  // 真正的 token / 模型名映射由 proxy 在转发时处理。
 
   return {
     env: {
       ANTHROPIC_BASE_URL: proxyBaseUrl,
       ANTHROPIC_AUTH_TOKEN: "cc-switch-managed", // 任意值，proxy 端会替换成真实 key
-      ANTHROPIC_MODEL: roleModel.sonnet,
-      ANTHROPIC_DEFAULT_SONNET_MODEL: roleModel.sonnet,
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: roleModel.haiku,
-      ANTHROPIC_DEFAULT_OPUS_MODEL: roleModel.opus,
+      ANTHROPIC_MODEL: "sonnet",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "sonnet",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "haiku",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "opus",
     },
   };
 }
@@ -64,10 +55,7 @@ export function buildClaudeSettings(
  *
  * 抛错：仅当 settings.json 完全无法解析（损坏严重到 jsonc-parser 也不行）
  */
-export function writeClaudeSettings(
-  path: string,
-  settings: ClaudeSettings
-): void {
+export function writeClaudeSettings(path: string, settings: ClaudeSettings): void {
   let rawText = "";
   let ast: Node | undefined;
   let existingEnv: Record<string, unknown> = {};
@@ -88,7 +76,7 @@ export function writeClaudeSettings(
       );
     }
     if (ast && typeof ast === "object") {
-      const envNode = (ast as unknown as Record<string, unknown>)["env"];
+      const envNode = (ast as unknown as Record<string, unknown>).env;
       if (envNode && typeof envNode === "object") {
         existingEnv = envNode as Record<string, unknown>;
       }
@@ -107,7 +95,7 @@ export function writeClaudeSettings(
     edits = modify(rawText, ["env"], mergedEnv, {});
   } else {
     // 文件不存在：直接写新 settings（作为完整文档）
-    rawText = JSON.stringify(settings, null, 2) + "\n";
+    rawText = `${JSON.stringify(settings, null, 2)}\n`;
   }
 
   // 如果有 edits，应用；否则直接用原 rawText

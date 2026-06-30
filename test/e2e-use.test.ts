@@ -3,7 +3,15 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { _resetForTests, getDb, setCurrentProvider, setSetting, listProviders, saveProvider, openDatabase } from "../src/store/db.ts";
+import {
+  _resetForTests,
+  getDb,
+  setCurrentProvider,
+  setSetting,
+  listProviders,
+  saveProvider,
+  openDatabase,
+} from "../src/store/db.ts";
 import { buildClaudeSettings, writeClaudeSettings } from "../src/claude-config.ts";
 
 // 测试用固定 master key（32 字节 hex）
@@ -16,15 +24,15 @@ beforeEach(() => {
   TEST_DIR_HOLDER.db = join(dir, "cc-switch.db");
   TEST_DIR_HOLDER.claude = join(dir, "claude-settings.json");
   mkdirSync(dir, { recursive: true });
-  process.env["CC_SWITCH_MASTER_KEY"] = TEST_KEY;
-  process.env["CC_SWITCH_DB"] = TEST_DIR_HOLDER.db;
+  process.env.CC_SWITCH_MASTER_KEY = TEST_KEY;
+  process.env.CC_SWITCH_DB = TEST_DIR_HOLDER.db;
   _resetForTests();
 });
 
 afterEach(() => {
   _resetForTests();
-  delete process.env["CC_SWITCH_MASTER_KEY"];
-  delete process.env["CC_SWITCH_DB"];
+  delete process.env.CC_SWITCH_MASTER_KEY;
+  delete process.env.CC_SWITCH_DB;
   try {
     if (existsSync(TEST_DIR_HOLDER.path)) {
       rmSync(TEST_DIR_HOLDER.path, { recursive: true, force: true });
@@ -43,8 +51,8 @@ const TEST_DIR_HOLDER: { path: string; db: string; claude: string } = {
 
 afterEach(() => {
   _resetForTests();
-  delete process.env["CC_SWITCH_MASTER_KEY"];
-  delete process.env["CC_SWITCH_DB"];
+  delete process.env.CC_SWITCH_MASTER_KEY;
+  delete process.env.CC_SWITCH_DB;
   try {
     if (existsSync(TEST_DIR_HOLDER.path)) {
       rmSync(TEST_DIR_HOLDER.path, { recursive: true, force: true });
@@ -69,7 +77,11 @@ async function setupProviders() {
     vendor: "openai-compatible",
     base_url: "https://api.moonshot.cn",
     api_key: "sk-kimi-original",
-    models: { sonnet: "kimi-k2-0711-preview", opus: "kimi-k2-0711-preview", haiku: "kimi-k2-0711-preview" },
+    models: {
+      sonnet: "kimi-k2-0711-preview",
+      opus: "kimi-k2-0711-preview",
+      haiku: "kimi-k2-0711-preview",
+    },
   });
 }
 
@@ -116,7 +128,7 @@ describe("SQLite provider use workflow", () => {
 
     setSetting("listen_address", "127.0.0.1");
     setSetting("listen_port", "17821");
-    const settings = buildClaudeSettings(kimi, "http://127.0.0.1:17821");
+    const settings = buildClaudeSettings("http://127.0.0.1:17821");
     writeClaudeSettings(TEST_DIR_HOLDER.claude, settings);
 
     // 验证 settings.json
@@ -139,10 +151,7 @@ describe("SQLite provider use workflow", () => {
       env: { MY_VAR: "keep" },
     };
     writeFileSync(TEST_DIR_HOLDER.claude, JSON.stringify(userSettings));
-    writeClaudeSettings(
-      TEST_DIR_HOLDER.claude,
-      buildClaudeSettings(deepseek, "http://127.0.0.1:17821")
-    );
+    writeClaudeSettings(TEST_DIR_HOLDER.claude, buildClaudeSettings("http://127.0.0.1:17821"));
 
     const finalSettings = JSON.parse(readFileSync(TEST_DIR_HOLDER.claude, "utf-8"));
     expect(finalSettings.mcpServers).toEqual(userSettings.mcpServers);

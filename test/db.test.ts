@@ -30,15 +30,15 @@ beforeEach(() => {
   TEST_DIR_HOLDER.path = dir;
   TEST_DIR_HOLDER.db = join(dir, "cc-switch.db");
   mkdirSync(dir, { recursive: true });
-  process.env["CC_SWITCH_MASTER_KEY"] = TEST_KEY;
-  process.env["CC_SWITCH_DB"] = TEST_DIR_HOLDER.db;
+  process.env.CC_SWITCH_MASTER_KEY = TEST_KEY;
+  process.env.CC_SWITCH_DB = TEST_DIR_HOLDER.db;
   _resetForTests();
 });
 
 afterEach(() => {
   _resetForTests();
-  delete process.env["CC_SWITCH_MASTER_KEY"];
-  delete process.env["CC_SWITCH_DB"];
+  delete process.env.CC_SWITCH_MASTER_KEY;
+  delete process.env.CC_SWITCH_DB;
   try {
     if (existsSync(TEST_DIR_HOLDER.path)) {
       rmSync(TEST_DIR_HOLDER.path, { recursive: true, force: true });
@@ -181,7 +181,10 @@ describe("DB survives re-opening with same key", () => {
     _resetForTests();
     openDatabase(TEST_DIR_HOLDER.db);
     const providers = await listProviders();
-    console.log("DEBUG providers:", providers.map(p => p.id));
+    console.log(
+      "DEBUG providers:",
+      providers.map((p) => p.id)
+    );
     expect(providers.length).toBe(1);
     expect(providers[0]?.api_key).toBe("sk-persistent");
   });

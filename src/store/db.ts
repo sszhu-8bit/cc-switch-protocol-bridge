@@ -9,17 +9,15 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AppConfig, ProviderConfig } from "../types.js";
+import type { ProviderConfig } from "../types.js";
 
 const SCHEMA_VERSION = 1;
 
 /** 默认 DB 路径 */
-export const DEFAULT_DB_PATH =
-  process.env["CC_SWITCH_DB"] ?? "/var/lib/cc-switch/cc-switch.db";
+export const DEFAULT_DB_PATH = process.env.CC_SWITCH_DB ?? "/var/lib/cc-switch/cc-switch.db";
 
 /** 默认 keyring 文件（fallback） */
-const DEFAULT_KEYRING_PATH =
-  process.env["CC_SWITCH_KEY_FILE"] ?? "/etc/cc-switch/master.key";
+const DEFAULT_KEYRING_PATH = process.env.CC_SWITCH_KEY_FILE ?? "/etc/cc-switch/master.key";
 
 /**
  * 加载或生成 32 字节主密钥（AES-256 key）
@@ -28,9 +26,9 @@ const DEFAULT_KEYRING_PATH =
  *   2. /etc/cc-switch/master.key 文件（hex/base64）
  *   3. 临时生成（仅当前进程有效，重启后无法解密已存数据）
  */
-export function loadMasterKey(dbPath: string = DEFAULT_DB_PATH): Uint8Array {
+export function loadMasterKey(): Uint8Array {
   // 1. 环境变量
-  const envKey = process.env["CC_SWITCH_MASTER_KEY"];
+  const envKey = process.env.CC_SWITCH_MASTER_KEY;
   if (envKey) {
     try {
       const key = decodeKey(envKey);
@@ -60,9 +58,7 @@ export function loadMasterKey(dbPath: string = DEFAULT_DB_PATH): Uint8Array {
       expanded.set(sha256(key), 16);
       return expanded;
     }
-    throw new Error(
-      `master key file at ${DEFAULT_KEYRING_PATH} must decode to 16 or 32 bytes`
-    );
+    throw new Error(`master key file at ${DEFAULT_KEYRING_PATH} must decode to 16 or 32 bytes`);
   }
 
   // 3. 临时生成（开发模式用）
@@ -91,10 +87,7 @@ function sha256(data: Uint8Array): Uint8Array {
  * AES-256-GCM 加密 API key
  * 输出格式: base64(iv || ciphertext || tag)
  */
-export async function encryptApiKey(
-  plain: string,
-  masterKey: Uint8Array
-): Promise<string> {
+export async function encryptApiKey(plain: string, masterKey: Uint8Array): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await crypto.subtle.importKey(
     "raw",
@@ -118,10 +111,7 @@ export async function encryptApiKey(
 /**
  * AES-256-GCM 解密 API key
  */
-export async function decryptApiKey(
-  encoded: string,
-  masterKey: Uint8Array
-): Promise<string> {
+export async function decryptApiKey(encoded: string, masterKey: Uint8Array): Promise<string> {
   const combined = new Uint8Array(Buffer.from(encoded, "base64"));
   if (combined.length < 12 + 16) {
     throw new Error("encrypted api_key is too short (corrupted?)");
@@ -223,14 +213,14 @@ let _masterKey: Uint8Array | null = null;
  */
 export function getDb(): Database {
   if (!_db) {
-    const path = process.env["CC_SWITCH_DB"] ?? DEFAULT_DB_PATH;
+    const path = process.env.CC_SWITCH_DB ?? DEFAULT_DB_PATH;
     _db = openDatabase(path);
   }
   return _db;
 }
 
-export function getMasterKey(path?: string): Uint8Array {
-  if (!_masterKey) _masterKey = loadMasterKey(path);
+export function getMasterKey(): Uint8Array {
+  if (!_masterKey) _masterKey = loadMasterKey();
   return _masterKey;
 }
 
@@ -248,10 +238,7 @@ export function _resetForTests() {
 /**
  * 保存 provider（包括加密的 api_key 到独立表）
  */
-export async function saveProvider(
-  p: ProviderConfig,
-  masterKey?: Uint8Array
-): Promise<void> {
+export async function saveProvider(p: ProviderConfig, masterKey?: Uint8Array): Promise<void> {
   const db = getDb();
   const key = masterKey ?? getMasterKey();
   const encKey = await encryptApiKey(p.api_key, key);
@@ -285,9 +272,7 @@ export async function deleteProvider(id: string): Promise<boolean> {
   return result.changes > 0;
 }
 
-export async function listProviders(
-  masterKey?: Uint8Array
-): Promise<ProviderConfig[]> {
+export async function listProviders(masterKey?: Uint8Array): Promise<ProviderConfig[]> {
   const db = getDb();
   const key = masterKey ?? getMasterKey();
 
@@ -352,17 +337,14 @@ export async function getProvider(
 
 export function setSetting(key: string, value: string): void {
   const db = getDb();
-  db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
-    key,
-    value
-  );
+  db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(key, value);
 }
 
 export function getSetting(key: string): string | null {
   const db = getDb();
-  const row = db.query(`SELECT value FROM settings WHERE key = ?`).get(key) as
-    | { value: string }
-    | null;
+  const row = db.query(`SELECT value FROM settings WHERE key = ?`).get(key) as {
+    value: string;
+  } | null;
   return row?.value ?? null;
 }
 
@@ -373,22 +355,4 @@ export function setCurrentProvider(id: string): void {
 
 export function getCurrentProviderId(): string {
   return getSetting("current_provider") ?? "";
-}
-
-// ========== 兼容旧 API（drop-in 替换 YAML 版 config.ts） ==========
-
-/**
- * 模仿原 YAML loadConfig() 的接口，但底层走 DB
- * 仍然返回 AppConfig 结构，向后兼容
- */
-export async function loadAppConfig(): Promise<AppConfig> {
-  const providers = await listProviders();
-  const listenAddress = getSetting("listen_address") ?? "127.0.0.1";
-  const listenPort = parseInt(getSetting("listen_port") ?? "17821", 10);
-  return {
-    listen_address: listenAddress,
-    listen_port: listenPort,
-    current_provider: getCurrentProviderId(),
-    providers,
-  };
 }

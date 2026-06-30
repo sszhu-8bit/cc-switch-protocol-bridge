@@ -2,7 +2,11 @@
 import { describe, expect, test } from "bun:test";
 import { anthropicToOpenAI, openAIToAnthropic } from "../src/converter/anthropic-to-openai.ts";
 import { OpenAIToAnthropicStream, formatAnthropicSSE } from "../src/converter/streaming.ts";
-import type { AnthropicMessagesRequest, OpenAIChatResponse, OpenAIStreamChunk } from "../src/types.ts";
+import type {
+  AnthropicMessagesRequest,
+  OpenAIChatResponse,
+  OpenAIStreamChunk,
+} from "../src/types.ts";
 
 describe("anthropic-to-openai single request", () => {
   test("converts simple text message", () => {
@@ -23,7 +27,10 @@ describe("anthropic-to-openai single request", () => {
     const req: AnthropicMessagesRequest = {
       model: "sonnet",
       max_tokens: 100,
-      system: [{ type: "text", text: "You are " }, { type: "text", text: "helpful." }],
+      system: [
+        { type: "text", text: "You are " },
+        { type: "text", text: "helpful." },
+      ],
       messages: [{ role: "user", content: "Hi" }],
     };
     const result = anthropicToOpenAI(req);
@@ -203,8 +210,8 @@ describe("openai-to-anthropic streaming", () => {
 
     const full = allEvents.join("");
     expect(full).toContain("event: message_start");
-    expect(full).toContain('event: content_block_start');
-    expect(full).toContain('event: content_block_delta');
+    expect(full).toContain("event: content_block_start");
+    expect(full).toContain("event: content_block_delta");
     expect(full).toContain('"text":"Hello"');
     expect(full).toContain('"text":" world"');
     expect(full).toContain("event: message_stop");

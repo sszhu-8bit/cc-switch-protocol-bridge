@@ -30,7 +30,7 @@ const sampleProvider: ProviderConfig = {
 
 describe("buildClaudeSettings", () => {
   test("returns settings pointing to local proxy", () => {
-    const settings = buildClaudeSettings(sampleProvider, "http://127.0.0.1:17821");
+    const settings = buildClaudeSettings("http://127.0.0.1:17821");
     expect(settings.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:17821");
     expect(settings.env.ANTHROPIC_AUTH_TOKEN).toBe("cc-switch-managed");
     expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("sonnet");
@@ -41,7 +41,7 @@ describe("buildClaudeSettings", () => {
 
 describe("writeClaudeSettings", () => {
   test("creates new file when none exists", () => {
-    const settings = buildClaudeSettings(sampleProvider, "http://127.0.0.1:17821");
+    const settings = buildClaudeSettings("http://127.0.0.1:17821");
     writeClaudeSettings(TEST_SETTINGS, settings);
     expect(existsSync(TEST_SETTINGS)).toBe(true);
     const parsed = JSON.parse(readFileSync(TEST_SETTINGS, "utf-8"));
@@ -57,7 +57,7 @@ describe("writeClaudeSettings", () => {
     };
     writeFileSync(TEST_SETTINGS, JSON.stringify(existing));
 
-    const settings = buildClaudeSettings(sampleProvider, "http://127.0.0.1:17821");
+    const settings = buildClaudeSettings("http://127.0.0.1:17821");
     writeClaudeSettings(TEST_SETTINGS, settings);
 
     const parsed = JSON.parse(readFileSync(TEST_SETTINGS, "utf-8"));
@@ -80,7 +80,7 @@ describe("writeClaudeSettings", () => {
     };
     writeFileSync(TEST_SETTINGS, JSON.stringify(existing));
 
-    const settings = buildClaudeSettings(sampleProvider, "http://127.0.0.1:17821");
+    const settings = buildClaudeSettings("http://127.0.0.1:17821");
     writeClaudeSettings(TEST_SETTINGS, settings);
 
     const parsed = JSON.parse(readFileSync(TEST_SETTINGS, "utf-8"));

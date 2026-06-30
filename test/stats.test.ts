@@ -77,8 +77,12 @@ describe("Stats 单实例", () => {
 
   test("2xx 是成功，4xx/5xx 是失败", () => {
     const stats = new Stats();
-    [200, 201, 204, 299].forEach((code) => stats.record("p", code));
-    [400, 404, 500, 502, 503].forEach((code) => stats.record("p", code));
+    for (const code of [200, 201, 204, 299]) {
+      stats.record("p", code);
+    }
+    for (const code of [400, 404, 500, 502, 503]) {
+      stats.record("p", code);
+    }
     const snap = stats.snapshot(null);
     expect(snap.totals.successful).toBe(4);
     expect(snap.totals.failed).toBe(5);
